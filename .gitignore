@@ -1,0 +1,14 @@
+# Secretos - NUNCA subir
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
