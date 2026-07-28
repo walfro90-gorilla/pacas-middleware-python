@@ -1,3 +1,4 @@
+import hmac
 import os
 import xmlrpc.client
 
@@ -11,6 +12,9 @@ ODOO_URL = os.environ.get("ODOO_URL", "https://odoo.distribuidoragarza.com")
 ODOO_DB = os.environ.get("ODOO_DB")
 ODOO_USER = os.environ.get("ODOO_USER")
 ODOO_API_KEY = os.environ.get("ODOO_API_KEY")
+# Secreto compartido con GHL. Unico control de acceso: Vercel Deployment Protection
+# esta apagado a proposito para que GHL pueda POSTear sin login.
+API_SECRET = os.environ.get("API_SECRET")
 
 # Sucursal -> campo de existencia en Odoo
 BRANCH_STOCK_FIELD = {
@@ -43,6 +47,25 @@ def num(v):
 def err(mensaje):
     """Error siempre HTTP 200 para que GHL no suspenda el webhook."""
     return jsonify({"status": "error", "mensaje": str(mensaje)}), 200
+
+
+def secret_ok(recibido):
+    """Comparacion en tiempo constante. encode() porque compare_digest revienta
+    con str no-ASCII."""
+    return bool(API_SECRET) and hmac.compare_digest(
+        (recibido or "").encode(), API_SECRET.encode()
+    )
+
+
+@app.before_request
+def require_secret():
+    """Guard para TODAS las rutas. A diferencia de los errores de negocio, esto si
+    devuelve 4xx/5xx: es un fallo de configuracion y tiene que verse en los
+    Execution Logs de GHL, no pasar como exito silencioso."""
+    if not API_SECRET:
+        return jsonify({"status": "error", "mensaje": "Falta env var API_SECRET"}), 500
+    if not secret_ok(request.headers.get("X-API-Secret")):
+        return jsonify({"status": "error", "mensaje": "No autorizado"}), 401
 
 
 @app.route("/api/ghl/consultar_inventario", methods=["POST"])
@@ -138,10 +161,22 @@ def crear_pedido():
         return err(e)
 
 
-# ponytail: self-check de la unica logica ramificada (mapeo sucursal->stock), sin Odoo.
+# ponytail: self-check de la logica ramificada (mapeo sucursal->stock y guard), sin Odoo.
 if __name__ == "__main__":
     rec = {"x_existencia_garza": 15, "x_existencia_regiomontano": 7, "x_precio_real": False}
     assert int(num(rec[BRANCH_STOCK_FIELD["Jhon"]])) == 15
     assert int(num(rec[BRANCH_STOCK_FIELD["Eli"]])) == 7
     assert float(num(rec["x_precio_real"])) == 0.0  # campo vacio -> 0
+
+    # El guard corta antes de tocar Odoo, asi que estas rutas no necesitan credenciales.
+    c = app.test_client()
+    API_SECRET = None
+    assert c.post("/api/ghl/crear_pedido").status_code == 500  # sin configurar
+    API_SECRET = "s3cr3t"
+    assert c.post("/api/ghl/crear_pedido").status_code == 401  # sin header
+    assert c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "otro"}).status_code == 401
+    assert not secret_ok(None) and not secret_ok("")  # header ausente != secreto vacio
+    # Con el header correcto pasa el guard y muere mas adelante, en Odoo -> no 401/500.
+    ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
+    assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
     print("ok")
