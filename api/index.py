@@ -7,8 +7,10 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # --- Config: TODO por env vars en Vercel (nada de secretos en el codigo) ---
-# URL no es secreto -> default OK. DB/USER/API_KEY -> obligatorios.
-ODOO_URL = os.environ.get("ODOO_URL", "https://odoo.distribuidoragarza.com")
+# Las cuatro son obligatorias. ODOO_URL sin default a proposito: un default se queda
+# viejo cuando cambia la instancia y termina apuntando en silencio al servidor
+# equivocado. Mejor reventar.
+ODOO_URL = os.environ.get("ODOO_URL")
 ODOO_DB = os.environ.get("ODOO_DB")
 ODOO_USER = os.environ.get("ODOO_USER")
 ODOO_API_KEY = os.environ.get("ODOO_API_KEY")
@@ -25,8 +27,8 @@ BRANCH_STOCK_FIELD = {
 
 def odoo_connect():
     """Autentica en Odoo y devuelve (uid, models). Lanza si falla."""
-    if not (ODOO_DB and ODOO_USER and ODOO_API_KEY):
-        raise RuntimeError("Faltan env vars: ODOO_DB / ODOO_USER / ODOO_API_KEY")
+    if not (ODOO_URL and ODOO_DB and ODOO_USER and ODOO_API_KEY):
+        raise RuntimeError("Faltan env vars: ODOO_URL / ODOO_DB / ODOO_USER / ODOO_API_KEY")
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
     uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_API_KEY, {})
     if not uid:
@@ -179,4 +181,17 @@ if __name__ == "__main__":
     # Con el header correcto pasa el guard y muere mas adelante, en Odoo -> no 401/500.
     ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
     assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
+
+    # Sin la env var, ODOO_URL queda vacia: nadie volvio a meter un default que apunte
+    # en silencio al servidor equivocado. (Se salta si la env var si esta puesta.)
+    assert os.environ.get("ODOO_URL") or ODOO_URL is None, "ODOO_URL no debe tener default"
+
+    # Y odoo_connect revienta si falta. Las otras tres se llenan para que el unico
+    # motivo posible del fallo sea la URL.
+    ODOO_URL, ODOO_DB, ODOO_USER, ODOO_API_KEY = None, "db", "user", "key"
+    try:
+        odoo_connect()
+        raise AssertionError("odoo_connect deberia exigir ODOO_URL")
+    except RuntimeError as e:
+        assert "Faltan env vars" in str(e), e
     print("ok")
