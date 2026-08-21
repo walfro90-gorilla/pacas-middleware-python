@@ -24,6 +24,10 @@ BRANCH_STOCK_FIELD = {
     "Eli": "x_existencia_regiomontano",
 }
 
+# Cuantas opciones como maximo manda consultar_inventario cuando el nombre
+# matchea varios productos (categorias tipo "hombre" matchean decenas).
+MAX_OPCIONES = 5
+
 
 def odoo_connect():
     """Autentica en Odoo y devuelve (uid, models). Lanza si falla."""
@@ -49,6 +53,29 @@ def num(v):
 def err(mensaje):
     """Error siempre HTTP 200 para que GHL no suspenda el webhook."""
     return jsonify({"status": "error", "mensaje": str(mensaje)}), 200
+
+
+def formatear_opciones(rows, stock_field):
+    """rows de product.product -> (opciones ordenadas por stock desc, texto listo
+    para el mensaje del bot). Con mas stock primero: al cliente le sirve ver
+    primero lo que si hay, no lo agotado."""
+    opciones = sorted(
+        (
+            {
+                "nombre": p.get("name") or "",
+                "precio_real": float(num(p.get("x_precio_real"))),
+                "stock_disponible": int(num(p.get(stock_field))),
+            }
+            for p in rows
+        ),
+        key=lambda o: o["stock_disponible"],
+        reverse=True,
+    )
+    texto = "\n".join(
+        f"{i}. {o['nombre']} — ${o['precio_real']:.0f} ({o['stock_disponible']} disponibles)"
+        for i, o in enumerate(opciones, 1)
+    )
+    return opciones, texto
 
 
 def secret_ok(recibido):
@@ -80,11 +107,13 @@ def consultar_inventario():
             return err("Falta 'producto_interes'")
 
         uid, models = odoo_connect()
+        stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
         rows = execute(
             models, uid, "product.product", "search_read",
             [["name", "ilike", producto]],
             fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
-            limit=1,
+            limit=MAX_OPCIONES,
+            order=f"{stock_field} desc",
         )
 
         if not rows:
@@ -94,16 +123,20 @@ def consultar_inventario():
                 "nombre_producto_odoo": "",
                 "precio_real": 0.0,
                 "stock_disponible": 0,
+                "opciones": [],
+                "opciones_texto": "",
             }), 200
 
-        p = rows[0]
-        stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
+        opciones, opciones_texto = formatear_opciones(rows, stock_field)
+        mejor = opciones[0]
         return jsonify({
             "status": "success",
             "producto_encontrado": True,
-            "nombre_producto_odoo": p.get("name") or "",
-            "precio_real": float(num(p.get("x_precio_real"))),
-            "stock_disponible": int(num(p.get(stock_field))),
+            "nombre_producto_odoo": mejor["nombre"],
+            "precio_real": mejor["precio_real"],
+            "stock_disponible": mejor["stock_disponible"],
+            "opciones": opciones,
+            "opciones_texto": opciones_texto,
         }), 200
     except Exception as e:
         return err(e)
@@ -169,6 +202,18 @@ if __name__ == "__main__":
     assert int(num(rec[BRANCH_STOCK_FIELD["Jhon"]])) == 15
     assert int(num(rec[BRANCH_STOCK_FIELD["Eli"]])) == 7
     assert float(num(rec["x_precio_real"])) == 0.0  # campo vacio -> 0
+
+    # formatear_opciones: ordena por stock desc y arma el texto, sin tocar Odoo.
+    rows_fake = [
+        {"name": "HOMBRE FRIO / VENADO ROSA", "x_precio_real": 4200.0, "x_existencia_garza": 2},
+        {"name": "CAMISA MIX / AGUILA", "x_precio_real": 2600.0, "x_existencia_garza": 10},
+        {"name": "AGOTADO / SIN STOCK", "x_precio_real": 3000.0, "x_existencia_garza": 0},
+    ]
+    opciones, texto = formatear_opciones(rows_fake, "x_existencia_garza")
+    assert [o["stock_disponible"] for o in opciones] == [10, 2, 0]  # mas stock primero
+    assert opciones[0]["nombre"] == "CAMISA MIX / AGUILA"
+    assert texto.startswith("1. CAMISA MIX / AGUILA — $2600 (10 disponibles)")
+    assert formatear_opciones([], "x_existencia_garza") == ([], "")
 
     # El guard corta antes de tocar Odoo, asi que estas rutas no necesitan credenciales.
     c = app.test_client()
