@@ -97,6 +97,17 @@ def require_secret():
         return jsonify({"status": "error", "mensaje": "No autorizado"}), 401
 
 
+@app.errorhandler(404)
+def not_found(e):
+    """Diagnostico: GHL reporta 404 en estas rutas pero curl directo no lo
+    reproduce. Devolver el path real que ve Flask para confirmar si Vercel
+    esta pasando un PATH_INFO distinto al de la URL solicitada."""
+    return jsonify({
+        "status": "error",
+        "mensaje": f"Ruta no encontrada: {request.method} {request.path}",
+    }), 200
+
+
 @app.route("/api/ghl/consultar_inventario", methods=["POST"])
 def consultar_inventario():
     try:
