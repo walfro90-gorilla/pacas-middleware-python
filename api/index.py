@@ -1,21 +1,66 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask, request, jsonify
 
 from lib.auth import require_secret, err
-from lib.odoo import odoo_connect, execute
+from lib.odoo import (
+    odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
+)
 
 app = Flask(__name__)
 app.before_request(require_secret)
 
 
-# Ruta comodin: ver comentario equivalente en api/ghl/consultar_inventario.py.
-@app.route("/", defaults={"_path": ""}, methods=["POST"])
-@app.route("/<path:_path>", methods=["POST"])
-def crear_pedido(_path):
+@app.route("/api/ghl/consultar_inventario", methods=["POST"])
+def consultar_inventario():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        producto = (data.get("producto_interes") or "").strip()
+        sucursal = (data.get("sucursal_asignada") or "").strip()
+        if not producto:
+            return err("Falta 'producto_interes'")
+
+        uid, models = odoo_connect()
+        stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
+        rows = execute(
+            models, uid, "product.product", "search_read",
+            [["name", "ilike", producto]],
+            fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
+            limit=MAX_OPCIONES,
+            order=f"{stock_field} desc",
+        )
+
+        if not rows:
+            return jsonify({
+                "status": "success",
+                "producto_encontrado": False,
+                "nombre_producto_odoo": "",
+                "precio_real": 0.0,
+                "stock_disponible": 0,
+                "opciones": [],
+                "opciones_texto": "",
+            }), 200
+
+        opciones, opciones_texto = formatear_opciones(rows, stock_field)
+        mejor = opciones[0]
+        return jsonify({
+            "status": "success",
+            "producto_encontrado": True,
+            "nombre_producto_odoo": mejor["nombre"],
+            "precio_real": mejor["precio_real"],
+            "stock_disponible": mejor["stock_disponible"],
+            "opciones": opciones,
+            "opciones_texto": opciones_texto,
+        }), 200
+    except Exception as e:
+        return err(e)
+
+
+@app.route("/api/ghl/crear_pedido", methods=["POST"])
+def crear_pedido():
     try:
         data = request.get_json(force=True, silent=True) or {}
         telefono = (data.get("telefono") or "").strip()
@@ -68,7 +113,7 @@ def crear_pedido(_path):
         return err(e)
 
 
-# ponytail: self-check del guard, sin tocar Odoo.
+# ponytail: self-check de la logica ramificada (guard, sin Odoo).
 if __name__ == "__main__":
     from lib import auth as _auth
 
@@ -80,6 +125,6 @@ if __name__ == "__main__":
     assert c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "otro"}).status_code == 401
     assert not _auth.secret_ok(None) and not _auth.secret_ok("")  # ausente != vacio
 
-    ok = c.post("/cualquier/otro/path", headers={"X-API-Secret": "s3cr3t"}, json={})
+    ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
     assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
     print("ok")

@@ -275,7 +275,7 @@ Verificado el 2026-07-30, devuelve:
 
 Nota que `nombre_producto_odoo` trae el prefijo de categoría y un **espacio final**:
 `"ACCESORIOS / AGUILA "`. Si lo pegas en medio de una frase queda raro. Se limpia en
-`api/ghl/consultar_inventario.py` con `.split("/")[-1].strip()` si algún día molesta.
+`api/index.py` con `.split("/")[-1].strip()` si algún día molesta.
 
 Los 8 casos que se corrieron ese día, todos como se esperaba:
 
@@ -337,8 +337,8 @@ sin login). El control de acceso es un **secreto compartido**: cada request tien
 traer el header `X-API-Secret` con el valor de la env var `API_SECRET`.
 
 El guard (`require_secret` en `lib/auth.py`) se registra como `@app.before_request` en
-cada función serverless bajo `api/ghl/`, así que cubre los dos endpoints y cualquiera
-que se agregue después. Comparación en tiempo constante (`hmac.compare_digest`).
+`api/index.py`, así que cubre los dos endpoints y cualquiera que se agregue después.
+Comparación en tiempo constante (`hmac.compare_digest`).
 
 Verificado en producción el 2026-07-28: sin header `401`, header incorrecto `401`,
 header correcto `200` con los datos.
