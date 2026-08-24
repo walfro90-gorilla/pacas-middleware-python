@@ -6,10 +6,10 @@ endpoints HTTP que GHL llama por webhook; por dentro habla XML-RPC con Odoo.
 Flask sobre funciones serverless de Vercel. Sin base de datos propia, sin estado.
 
 ```
-GHL Workflow  ──POST + X-API-Secret──▶  Vercel (Flask)  ──XML-RPC──▶  Odoo
-   (webhook)                            api/index.py                (product.product,
-                                                                     res.partner,
-                                                                     sale.order)
+GHL Workflow  ──POST + X-API-Secret──▶  Vercel (Flask)              ──XML-RPC──▶  Odoo
+   (webhook)                            api/ghl/consultar_inventario.py         (product.product,
+                                         api/ghl/crear_pedido.py                res.partner,
+                                         (comparten lib/odoo.py y lib/auth.py)  sale.order)
 ```
 
 Para configurar el lado de GHL: **[GHL_SETUP.md](GHL_SETUP.md)**.
@@ -79,8 +79,9 @@ Vercel Deployment Protection está **apagado a propósito** — con él encendid
 puede POSTear sin login. El control de acceso es un secreto compartido: cada request
 lleva el header `X-API-Secret` con el valor de la env var `API_SECRET`.
 
-El guard es un `@app.before_request`, así que cubre las dos rutas y cualquiera que se
-agregue después. Comparación en tiempo constante (`hmac.compare_digest`).
+El guard (`require_secret` en `lib/auth.py`) se registra como `before_request` en cada
+función serverless — cubre los dos endpoints y cualquiera que se agregue después sin
+duplicar lógica. Comparación en tiempo constante (`hmac.compare_digest`).
 
 Procedimiento de rotación en [GHL_SETUP.md § Autenticación](GHL_SETUP.md#autenticación).
 
@@ -127,21 +128,22 @@ normaliza.
 
 ## Desarrollo local
 
-El módulo trae un self-check sin dependencias de red — no toca Odoo:
+Cada módulo trae su propio self-check sin dependencias de red — no toca Odoo:
 
 ```bash
-python3 api/index.py    # imprime "ok" o revienta con AssertionError
+python3 lib/odoo.py                        # mapeo sucursal→bodega, normalización de False, ODOO_URL sin default
+python3 api/ghl/consultar_inventario.py    # los 3 casos del guard + formatear_opciones (vía app.test_client())
+python3 api/ghl/crear_pedido.py            # los 4 casos del guard (vía app.test_client())
 ```
-
-Cubre el mapeo sucursal→bodega, la normalización de `False`, los cuatro casos del guard
-de auth (vía `app.test_client()`) y que `ODOO_URL` no tenga default.
 
 Necesita Flask. Si el sistema no trae `pip` ni `venv`:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv .venv && VIRTUAL_ENV=.venv uv pip install Flask==3.0.3
-.venv/bin/python api/index.py
+.venv/bin/python api/ghl/consultar_inventario.py
+.venv/bin/python api/ghl/crear_pedido.py
+.venv/bin/python lib/odoo.py
 ```
 
 ---
@@ -154,8 +156,12 @@ Push a `main` dispara el auto-deploy. Para forzarlo a mano:
 vercel --prod --yes
 ```
 
-`vercel.json` reescribe `/api/(.*)` → `/api/index`, o sea que **todas** las rutas caen
-en el mismo archivo y las resuelve el router de Flask.
+Sin `vercel.json`: cada archivo bajo `api/ghl/` es su propia función serverless,
+enrutada por Vercel según su path real (`api/ghl/consultar_inventario.py` →
+`/api/ghl/consultar_inventario`). Antes había un `rewrite` de `/api/(.*)` a un único
+`api/index.py`, pero Vercel a veces entregaba a Flask el path reescrito en vez del
+solicitado (404 intermitente e indetectable salvo revisando el `Historial de
+inscripciones` del workflow en GHL) — se quitó por eso, no por preferencia de estilo.
 
 Cambiar una env var **no** basta: hay que redeployar para que la función la tome.
 
@@ -177,10 +183,18 @@ Si el curl funciona pero GHL falla, el problema está en el body/mapeo de GHL. R
 
 ## Estado y pendientes
 
-Verificado en producción el 2026-07-28: ambos endpoints responden con datos reales de
-Odoo, y el guard de auth devuelve 401/200 según corresponde.
+Verificado en producción el 2026-07-30 con 8 casos por curl: sin header `401`, secreto
+incorrecto `401`, producto con stock `200`, otra sucursal `200`, sucursal inválida cae a
+GARZA, producto inexistente `200` con `producto_encontrado:false`, producto vacío `200`
+con `status:error`, y el body exacto que manda GHL.
 
-- [ ] Configurar los Workflows del lado GHL siguiendo [GHL_SETUP.md](GHL_SETUP.md) — nadie lo ha hecho todavía
+- [x] Separado `api/index.py` en `api/ghl/consultar_inventario.py` + `api/ghl/crear_pedido.py`
+  (2026-08-24) — el `rewrite` de `vercel.json` causaba 404 intermitentes en ejecuciones
+  reales del workflow (no solo en el botón "Test" de GHL, como se pensó antes)
+- [x] `consultar_inventario` conectado en GHL — ver [GHL_SETUP.md § Parte A](GHL_SETUP.md#parte-a--lo-que-está-armado-en-ghl)
+- [ ] **Conectar el número de WhatsApp** en la sub-cuenta — es lo único que falta para que responda; sin canal provisionado el workflow corre pero el mensaje no sale
+- [ ] Probar end-to-end con un mensaje real y revisar los *Registros de ejecución*
+- [ ] `crear_pedido` sigue sin workflow — sólo se conectó la consulta
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
 - [ ] `crear_pedido` no deduplica: si el trigger de GHL puede repetirse, hace falta guarda

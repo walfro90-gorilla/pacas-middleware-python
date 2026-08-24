@@ -1,7 +1,11 @@
 # Conectar GoHighLevel con el middleware Odoo
 
-Guía de configuración del lado GHL. El middleware ya está deployado y verificado
-contra Odoo — aquí solo se configura GHL para que lo llame.
+Cómo está conectado GHL con el middleware. El middleware ya está deployado y verificado
+contra Odoo; esto documenta el lado GHL.
+
+**Estado al 2026-07-30:** `consultar_inventario` armado, publicado y enganchado al bot
+(Parte A). `crear_pedido` sin conectar (A8). Falta provisionar el canal de WhatsApp
+para que las respuestas salgan (A6).
 
 Base URL: `https://pacas-middleware-python.vercel.app`
 
@@ -78,131 +82,178 @@ un `sale.order` en borrador con **1 sola línea, cantidad 1**.
 
 ---
 
-## Parte A — Workflow + Custom Webhook (bot de texto)
+## Parte A — Lo que está armado en GHL
 
-### A1. Campos donde el bot guarda lo que captura
+Esto ya no es una propuesta: es el registro de la configuración que corre hoy en la
+sub-cuenta **PACAS TEXAS** (`65nBmfBOkGY2L4al5H5O`). Armado y verificado el 2026-07-30.
 
-`Settings > Custom Fields`. Necesitas dos en el contacto:
+```
+Cliente pregunta precio/existencia
+  → bot emite etiqueta de acción y CALLA
+  → acción del bot "Consultar Odoo - Apartar Paca"
+  → workflow [PACAS TEXAS] Consultar Odoo / Apartar  (756b4ce8-…, PUBLICADO)
+       #1 Consultar inventario Odoo   ← Custom Webhook
+       Evaluar respuesta Odoo         ← If/Else, 5 ramas
+       cada rama → acción Conversation AI, que redacta y responde
+```
 
-| Campo | Tipo | Valores |
-|---|---|---|
-| `producto_interes` | Text | libre — el nombre que dijo el cliente |
-| `sucursal_asignada` | Dropdown | **exactamente** `Jhon` o `Eli` |
+### A1. Secreto
 
-> ⚠️ `sucursal_asignada` es case-sensitive y solo acepta esos dos valores. Cualquier
-> otra cosa (`jhon`, `JHON`, vacío, `Regiomontano`) **no da error**: el middleware cae
-> en silencio a la bodega GARZA y devuelve el stock equivocado. Usa Dropdown, no Text.
+`Configuración > Valores personalizados`, entrada **`api_secret`**, referenciada como
+`{{custom_values.api_secret}}`. Un solo lugar: rotarlo es un cambio, no cinco.
 
-En el bot (`AI Agents > Conversation AI`), usa el nodo **AI Action - Capture
-Information (Qualify)** para llenar `producto_interes` durante la charla.
+### A2. Campos del contacto — no hizo falta crear ninguno
 
-### A2. Crear el Workflow
+El bot **ya capturaba** el producto en el campo `¿Qué Producto Te Interesa?`
+(`{{contact.qu_producto_te_interesa}}`), vía su acción *Información de Contacto →
+Producto de Interes*. Se reusa ese.
 
-`Automation > Workflows > + Create Workflow`.
+`sucursal_asignada` va **fija en `"Jhon"`** dentro del body, porque el agente de esta
+sub-cuenta es Jhon Tovar. Eso también elimina el riesgo de abajo.
 
-**Trigger:** el que aplique — `Customer Replied`, o mejor un `Contact Tag` (ej. tag
-`consultar-stock`) que el bot ponga cuando ya capturó el producto. El tag es más
-controlable que reaccionar a cada mensaje.
+> ⚠️ `sucursal_asignada` es case-sensitive: sólo `Jhon` o `Eli`. Cualquier otra cosa
+> (`jhon`, vacío, `Regiomontano`) **no da error** — el middleware cae en silencio a la
+> bodega GARZA y devuelve el stock equivocado. Confirmado por curl el 2026-07-30.
 
-### A3. Acción: Custom Webhook
+> ⚠️ La acción *Información de Contacto* de GHL **sólo actualiza campos vacíos**. Una
+> vez que `¿Qué Producto Te Interesa?` tiene valor, no vuelve a cambiar: si el cliente
+> pregunta luego por otro producto, el webhook consulta el primero. Es limitación de
+> GHL. Si estorba, hay que limpiar el campo antes de consultar.
 
-`+ Add action > Send Data > Custom Webhook`.
+### A3. Acción #1 — Custom Webhook
 
 | Campo | Valor |
 |---|---|
-| **Event** | `CUSTOM` ← obligatorio, es lo que habilita el editor de Raw Body |
-| **Method** | `POST` |
+| **Evento** | `CUSTOM` ← obligatorio, es lo que habilita el editor del cuerpo |
+| **Método** | `POST` |
 | **URL** | `https://pacas-middleware-python.vercel.app/api/ghl/consultar_inventario` |
+| **Autorización** | None |
+| **Encabezados** | `X-API-Secret: {{custom_values.api_secret}}` |
+| **Tipo de contenido** | `application/json` |
 
-**Headers:**
-```
-Content-Type: application/json
-X-API-Secret: {{ custom_values.api_secret }}
-```
-
-Guarda el secreto una sola vez en `Settings > Custom Values` (nombre sugerido
-`api_secret`) y referéncialo desde ahí en las dos acciones. Así no queda pegado en cada
-webhook y rotarlo es un solo cambio. Insértalo con el ícono de etiqueta, no a mano.
-
-**Raw Body:**
+**Cuerpo del mensaje** (una sola línea):
 ```json
-{
-  "producto_interes": "{{contact.producto_interes}}",
-  "sucursal_asignada": "{{contact.sucursal_asignada}}"
-}
+{"producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon"}
 ```
 
-Los `{{...}}` no los escribas a mano: usa el **ícono de etiqueta (tag)** al lado del
-campo para abrir el selector de valores dinámicos y elegir el custom field. Los nombres
-internos de custom fields en GHL no siempre son los que ves en pantalla.
+> 💰 Custom Webhook es **acción prémium**: GHL cobra por ejecución. Cada consulta de
+> stock cuesta.
 
-### A4. Capturar la respuesta
+### A4. La respuesta archivada
 
-Activa **"Save response from this Webhook"** y dale a **Test Request**. GHL guarda esa
-respuesta de ejemplo como plantilla y a partir de ahí las llaves (`precio_real`,
-`stock_disponible`, …) aparecen en el selector de valores dinámicos de las acciones
-siguientes.
+Con **"Guardar la respuesta de este Webhook"** activo aparece la sección *Envíe una
+solicitud de prueba*, que exige **seleccionar un contacto** — ese campo vacío es lo que
+produce el error `¡Vaya! Parece que ha omitido algunos campos`, sin marcar nada en rojo.
 
-Dos cosas de esto:
+GHL archiva la respuesta del test como plantilla de variables. **Importa qué respuesta
+archivas**: el endpoint devuelve 5 llaves en el camino feliz pero sólo 2
+(`status`, `mensaje`) si hay 401 o si `producto_interes` viene vacío. Si archivas una de
+2 llaves, el If/Else nunca podrá condicionar sobre `stock_disponible`.
 
-- **Haz el Test Request con un producto que exista y tenga stock**, ej. `AGUILA`. Si
-  testeas con uno inexistente, `producto_encontrado` viene `false` y los números en 0 —
-  la plantilla queda igual de válida, pero es más fácil equivocarse leyéndola.
-- **No inventes la sintaxis de la variable.** GHL no documenta el formato exacto y
-  cambia entre cuentas. Después del test, insértalas siempre desde el selector.
-
-### A5. Ramificar según el resultado
-
-`+ Add action > If/Else`.
-
-> 🔴 **Importante:** los endpoints devuelven **HTTP 200 aunque fallen** (a propósito —
-> si devolvieran 4xx/5xx, GHL suspende el webhook tras varios fallos). O sea que la
-> acción Custom Webhook casi siempre se va a ver como exitosa. **Nunca ramifiques por
-> status HTTP.** Ramifica por el contenido:
-
-| Rama | Condición | Qué hacer |
-|---|---|---|
-| Error | `status` = `error` | Avisar al humano / notificación interna. El campo `mensaje` trae la causa |
-| No encontrado | `producto_encontrado` = `false` | Responder "no manejamos ese producto" |
-| Sin stock | `stock_disponible` = `0` | Ofrecer alternativa o lista de espera |
-| OK | resto | Seguir a A6 |
-
-### A6. Responder al cliente
-
-`+ Add action > Send SMS` (o WhatsApp / la acción **Conversation AI** con canal
-WhatsApp si quieres que el bot lo redacte).
+Sintaxis resultante de las variables:
 
 ```
-Sí tenemos {{nombre_producto_odoo}} en la sucursal {{contact.sucursal_asignada}}.
-Precio: ${{precio_real}} — quedan {{stock_disponible}} piezas.
+{{custom_webhook.1.response.nombre_producto_odoo}}
+{{custom_webhook.1.response.precio_real}}
+{{custom_webhook.1.response.producto_encontrado}}
+{{custom_webhook.1.response.status}}
+{{custom_webhook.1.response.stock_disponible}}
 ```
 
-(los tres primeros, insertados desde el selector como respuesta guardada del webhook)
+### A5. Acción #2 — If/Else (`Si / si no`)
 
-### A7. Crear el pedido
+> 🔴 Los endpoints devuelven **HTTP 200 aunque fallen** (a propósito — con 4xx/5xx GHL
+> suspende el webhook tras varios fallos). **Nunca ramifiques por status HTTP.**
 
-Segundo Workflow, o rama del mismo tras confirmación del cliente. Misma acción Custom
-Webhook, cambiando URL y body:
+Las ramas se evalúan en orden; la última es el `else`:
+
+| # | Rama | Condición | Mensaje |
+|---|---|---|---|
+| 1 | Error Odoo | `status` **Es** `error` | no pude consultar, ¿te paso con el equipo? |
+| 2 | No existe | `producto_encontrado` **Es** `False` | no lo encontré, ¿me confirmas el nombre? |
+| 3 | Sin stock | `stock_disponible` **Menor o igual a** `0` | se agotó, ¿te aviso cuando llegue? |
+| 4 | Con stock | `stock_disponible` **Mayor que** `0` | precio + piezas + ¿te la aparto? |
+| 5 | No concluyente | *(else)* | déjame confirmarlo con el equipo |
+
+> 🔴 **El `else` tiene que ser el caso seguro, no el optimista.** Si el webhook expira o
+> GHL no puebla la respuesta, las condiciones 1-4 fallan todas y el contacto cae al
+> `else`. Con el "sí tenemos" ahí, el bot le prometería stock inexistente al cliente con
+> los números en blanco. Por eso el caso bueno es condición explícita (`> 0`) y el `else`
+> es un "déjame confirmarlo".
+
+> ⚠️ `Menor o igual a 0`, no `Igual a 0`: Odoo puede devolver existencia negativa, y con
+> igualdad esa caería en la rama de "sí hay".
+
+### A6. Responder — acción Conversation AI
+
+Una por rama: `+ Añadir > Conversation AI`. No es un mensaje plantilla — la IA
+conversacional redacta con la personalidad del agente y espera la respuesta del cliente.
+
+| Campo | Valor |
+|---|---|
+| **Pregunta** | el texto de la rama, con las variables del webhook |
+| **Canal** | `WHATSAPP` |
+| Configuraciones avanzadas | apagado — hereda la personalidad ya cargada del agente |
+| Ramas | `No Condition Met` / `Time Out`, por defecto |
+
+El tooltip de *Pregunta* dice: *"Esta es la pregunta que hará el bot y, en función de la
+respuesta a esta pregunta, se decidirá la siguiente rama"*.
+
+> ⚠️ **El canal tiene que estar provisionado.** Al 2026-07-30 WhatsApp **no lo está** en
+> esta sub-cuenta: `Configuración > WhatsApp` muestra la oferta de suscripción ($10/mes,
+> *Comprar de Agencia*). El workflow corre pero el mensaje no sale. El tráfico real de
+> hoy entra por **Facebook Messenger** (página "Pacas AA"); el "WhatsApp de Pacas Texas"
+> del que habla el bot es un grupo manual, no un canal de GHL.
+
+### A7. Enganchar el bot
+
+`Agentes de IA > Conversation AI > Lista de agentes > Agente IA de ventas Jhon Tovar >
+Objetivos del bot > Configure sus acciones > Activar un flujo de trabajo`.
+
+La acción **"Consultar Odoo - Apartar Paca"** apunta al workflow publicado. Su condición
+ya cubre el caso: *"Activa este flujo ÚNICAMENTE cuando el cliente muestre una clara
+intención de compra, pida explícitamente apartar/comprar una paca, o pregunte por el
+precio exacto y disponibilidad de inventario… NO intentes adivinar el precio ni el
+inventario, simplemente ejecútalo y CALLA para que el sistema tome el control."*
+
+> ⚠️ **Sólo aparecen workflows publicados** en ese selector. Si el workflow está en
+> Borrador, el campo muestra un UUID crudo y la acción es un no-op silencioso: el bot
+> cree que disparó algo y no pasa nada. Así estaba antes (`6d469257-…`, inexistente), y
+> por eso nunca funcionó.
+
+### A8. Crear el pedido — pendiente
+
+`crear_pedido` **no está conectado**. Sería otro Custom Webhook igual, cambiando URL y
+cuerpo:
 
 **URL:** `https://pacas-middleware-python.vercel.app/api/ghl/crear_pedido`
 
-**Headers:** los mismos (`Content-Type` + `X-API-Secret`).
-
-**Raw Body:**
 ```json
 {
   "telefono": "{{contact.phone}}",
   "nombre_cliente": "{{contact.name}}",
-  "producto_interes": "{{contact.producto_interes}}"
+  "producto_interes": "{{contact.qu_producto_te_interesa}}"
 }
 ```
-
-Guarda la respuesta y confirma con `numero_orden`.
 
 > ⚠️ Esto **escribe en Odoo**: crea contacto (si el teléfono no existe) y crea la orden.
 > No lo pongas detrás de un trigger que pueda dispararse dos veces con el mismo contacto
 > — no hay deduplicación, dos disparos = dos órdenes. Un tag de una sola vez o una
-> condición "solo si `numero_orden` está vacío" evita el doble pedido.
+> condición "solo si `numero_orden` está vacío" evita el doble pedido. Tampoco le
+> dispares Test Request: el test escribe de verdad.
+
+### A9. Trampas de la UI de GHL
+
+Costaron horas; anotadas para el próximo:
+
+- **Los dropdowns ignoran el click si no hubo `hover` antes.** El valor se queda igual y
+  *Guardar acción* reporta éxito. Siempre recargar y verificar el campo después.
+- El modal de *Iniciar un flujo de trabajo* **no se cierra al guardar**, aunque el
+  guardado sí persiste. Verificar recargando, no por el modal.
+- El selector de variables **no indexa las hojas anidadas**: buscar
+  `stock_disponible` no devuelve nada; hay que navegar
+  `Custom Webhook > #1 … > Response`.
+- El builder congela el renderer seguido. Guardar acción por acción, no todo al final.
 
 ---
 
@@ -217,13 +268,30 @@ curl -s -X POST https://pacas-middleware-python.vercel.app/api/ghl/consultar_inv
   -d '{"producto_interes":"AGUILA","sucursal_asignada":"Jhon"}'
 ```
 
-Verificado el 2026-07-28, devuelve:
+Verificado el 2026-07-30, devuelve:
 ```json
 {"nombre_producto_odoo":"ACCESORIOS / AGUILA ","precio_real":2600.0,"producto_encontrado":true,"status":"success","stock_disponible":6}
 ```
 
+Nota que `nombre_producto_odoo` trae el prefijo de categoría y un **espacio final**:
+`"ACCESORIOS / AGUILA "`. Si lo pegas en medio de una frase queda raro. Se limpia en
+`api/ghl/consultar_inventario.py` con `.split("/")[-1].strip()` si algún día molesta.
+
+Los 8 casos que se corrieron ese día, todos como se esperaba:
+
+| Caso | HTTP | Respuesta |
+|---|---|---|
+| sin header `X-API-Secret` | 401 | `{"mensaje":"No autorizado","status":"error"}` |
+| secreto incorrecto | 401 | igual |
+| `AGUILA` / `Jhon` | 200 | precio 2600.0, stock 6 |
+| `AGUILA` / `Eli` | 200 | precio 2600.0, stock **0** |
+| `AGUILA` / `jhon` minúscula | 200 | stock 6 ← cayó a GARZA sin avisar |
+| producto inexistente | 200 | `producto_encontrado:false`, 5 llaves |
+| `producto_interes` vacío | 200 | `{"mensaje":"Falta 'producto_interes'"}`, **2 llaves** |
+| body idéntico al de GHL | 200 | igual que el tercero |
+
 Si en GHL falla pero el curl funciona, el problema está en el body/mapeo de GHL, no en
-el middleware. Revisa los **Execution Logs** del Workflow.
+el middleware. Revisa los **Registros de ejecución** del Workflow.
 
 Diagnóstico rápido por código de respuesta:
 
@@ -268,9 +336,9 @@ Deployment Protection de Vercel está apagado a propósito (si no, GHL no puede 
 sin login). El control de acceso es un **secreto compartido**: cada request tiene que
 traer el header `X-API-Secret` con el valor de la env var `API_SECRET`.
 
-El guard vive en `api/index.py` como un `@app.before_request`, así que cubre las dos
-rutas y cualquiera que se agregue después. Comparación en tiempo constante
-(`hmac.compare_digest`).
+El guard (`require_secret` en `lib/auth.py`) se registra como `@app.before_request` en
+cada función serverless bajo `api/ghl/`, así que cubre los dos endpoints y cualquiera
+que se agregue después. Comparación en tiempo constante (`hmac.compare_digest`).
 
 Verificado en producción el 2026-07-28: sin header `401`, header incorrecto `401`,
 header correcto `200` con los datos.
