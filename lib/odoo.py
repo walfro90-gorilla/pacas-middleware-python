@@ -20,6 +20,34 @@ BRANCH_STOCK_FIELD = {
 # matchea varios productos (categorias tipo "hombre" matchean decenas).
 MAX_OPCIONES = 5
 
+# Grupos de palabras que el cliente/LLM usa indistintamente pero que Odoo trata
+# como substrings distintos (ilike es literal): "caballero" nunca hace match con
+# productos nombrados "HOMBRE" y viceversa. Confirmado 2026-08-24 contra el
+# catalogo real: "caballero" trae 1 producto (agotado), "hombre" trae 30 (con
+# stock). Solo se agregan pares verificados contra el catalogo real, no adivinados.
+GRUPOS_SINONIMOS = [
+    {"hombre", "caballero"},
+    {"mujer", "dama"},
+]
+
+
+def terminos_busqueda(producto):
+    """Expande producto_interes con sinonimos conocidos si es exactamente una
+    palabra de un grupo (ej. "caballero" -> tambien busca "hombre"). Frases mas
+    largas se buscan tal cual, sin expandir."""
+    clave = producto.strip().lower()
+    for grupo in GRUPOS_SINONIMOS:
+        if clave in grupo:
+            return sorted(grupo)
+    return [producto]
+
+
+def domain_ilike_or(campo, terminos):
+    """Domain de Odoo para "campo ilike t1 OR campo ilike t2 OR ...". Notacion
+    polaca: N terminos necesitan N-1 operadores '|' antes de las condiciones."""
+    condiciones = [[campo, "ilike", t] for t in terminos]
+    return ["|"] * (len(condiciones) - 1) + condiciones
+
 
 def odoo_connect():
     """Autentica en Odoo y devuelve (uid, models). Lanza si falla."""
@@ -67,6 +95,18 @@ def formatear_opciones(rows, stock_field):
 
 # ponytail: self-check de la logica de conexion, sin Odoo real.
 if __name__ == "__main__":
+    # terminos_busqueda: expande solo si es EXACTAMENTE una palabra de un grupo.
+    assert terminos_busqueda("caballero") == ["caballero", "hombre"]
+    assert terminos_busqueda("Caballero") == ["caballero", "hombre"]  # case-insensitive
+    assert terminos_busqueda("dama") == ["dama", "mujer"]
+    assert terminos_busqueda("hombre") == ["caballero", "hombre"]  # cualquier lado del grupo
+    assert terminos_busqueda("ropa para caballero") == ["ropa para caballero"]  # frase: sin expandir
+    assert terminos_busqueda("niño") == ["niño"]  # sin grupo conocido: tal cual
+
+    # domain_ilike_or: notacion polaca de Odoo (N terminos -> N-1 '|').
+    assert domain_ilike_or("name", ["x"]) == [["name", "ilike", "x"]]
+    assert domain_ilike_or("name", ["x", "y"]) == ["|", ["name", "ilike", "x"], ["name", "ilike", "y"]]
+
     # Sin la env var, ODOO_URL queda vacia: nadie volvio a meter un default que apunte
     # en silencio al servidor equivocado. (Se salta si la env var si esta puesta.)
     assert os.environ.get("ODOO_URL") or ODOO_URL is None, "ODOO_URL no debe tener default"

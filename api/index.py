@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from lib.auth import require_secret, err
 from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
+    terminos_busqueda, domain_ilike_or,
 )
 
 app = Flask(__name__)
@@ -25,9 +26,10 @@ def consultar_inventario():
 
         uid, models = odoo_connect()
         stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
+        domain = domain_ilike_or("name", terminos_busqueda(producto))
         rows = execute(
             models, uid, "product.product", "search_read",
-            [["name", "ilike", producto]],
+            domain,
             fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
             limit=MAX_OPCIONES,
             order=f"{stock_field} desc",
@@ -85,7 +87,7 @@ def crear_pedido():
         # 2. Producto por nombre.
         prods = execute(
             models, uid, "product.product", "search",
-            [["name", "ilike", producto]],
+            domain_ilike_or("name", terminos_busqueda(producto)),
             limit=1,
         )
         if not prods:
