@@ -199,6 +199,20 @@ conversacional redacta con la personalidad del agente y espera la respuesta del 
 El tooltip de *Pregunta* dice: *"Esta es la pregunta que hará el bot y, en función de la
 respuesta a esta pregunta, se decidirá la siguiente rama"*.
 
+> 💡 **Nodo "Con stock" — 2-3 opciones en un solo merge tag.** El endpoint encuentra
+> varios productos (categorías como "hombre" matchean decenas), pero GHL cachea el
+> schema de merge tags del webhook cuando se crea el nodo y **nunca expone campos
+> nuevos** (`opciones_texto` jamás aparece en el picker, ni reprobando ni recargando).
+> Solución sin pelear el cache: `consultar_inventario` empaqueta la lista de hasta 3
+> opciones **con existencia** (numerada, con precio y piezas) dentro de
+> `nombre_producto_odoo` — un campo que el picker **ya** expone. En los demás casos
+> (sin stock, no existe) ese campo lleva sólo el nombre único, para no ensuciar esas
+> ramas. **En el nodo "Con stock" la parte del producto debe ser sólo**
+> `{{custom_webhook.1.response.nombre_producto_odoo}}` — borra los merge tags sueltos de
+> `precio_real` / `stock_disponible` de ese nodo (ya vienen dentro de la lista; si los
+> dejas, se renderizan dos veces). Las otras 4 ramas quedan intactas. Ver el comentario
+> `ponytail:` en `api/index.py`.
+
 > ⚠️ **El canal tiene que estar provisionado.** Al 2026-07-30 WhatsApp **no lo está** en
 > esta sub-cuenta: `Configuración > WhatsApp` muestra la oferta de suscripción ($10/mes,
 > *Comprar de Agencia*). El workflow corre pero el mensaje no sale. El tráfico real de

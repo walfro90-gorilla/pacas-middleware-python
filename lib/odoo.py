@@ -70,6 +70,14 @@ def num(v):
     return v if isinstance(v, (int, float)) else 0
 
 
+def texto_opciones(opciones):
+    """Lista numerada lista para el mensaje del bot (renumera desde 1)."""
+    return "\n".join(
+        f"{i}. {o['nombre']} — ${o['precio_real']:.0f} ({o['stock_disponible']} disponibles)"
+        for i, o in enumerate(opciones, 1)
+    )
+
+
 def formatear_opciones(rows, stock_field):
     """rows de product.product -> (opciones ordenadas por stock desc, texto listo
     para el mensaje del bot). Con mas stock primero: al cliente le sirve ver
@@ -86,11 +94,7 @@ def formatear_opciones(rows, stock_field):
         key=lambda o: o["stock_disponible"],
         reverse=True,
     )
-    texto = "\n".join(
-        f"{i}. {o['nombre']} — ${o['precio_real']:.0f} ({o['stock_disponible']} disponibles)"
-        for i, o in enumerate(opciones, 1)
-    )
-    return opciones, texto
+    return opciones, texto_opciones(opciones)
 
 
 # ponytail: self-check de la logica de conexion, sin Odoo real.
@@ -106,6 +110,17 @@ if __name__ == "__main__":
     # domain_ilike_or: notacion polaca de Odoo (N terminos -> N-1 '|').
     assert domain_ilike_or("name", ["x"]) == [["name", "ilike", "x"]]
     assert domain_ilike_or("name", ["x", "y"]) == ["|", ["name", "ilike", "x"], ["name", "ilike", "y"]]
+
+    # texto_opciones: numera desde 1, precio sin decimales, una linea por opcion.
+    _ops = [
+        {"nombre": "CAMISA HOMBRE", "precio_real": 250.0, "stock_disponible": 12},
+        {"nombre": "PLAYERA HOMBRE", "precio_real": 180.0, "stock_disponible": 8},
+    ]
+    assert texto_opciones(_ops) == (
+        "1. CAMISA HOMBRE — $250 (12 disponibles)\n"
+        "2. PLAYERA HOMBRE — $180 (8 disponibles)"
+    )
+    assert texto_opciones([]) == ""
 
     # Sin la env var, ODOO_URL queda vacia: nadie volvio a meter un default que apunte
     # en silencio al servidor equivocado. (Se salta si la env var si esta puesta.)

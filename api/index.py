@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from lib.auth import require_secret, err
 from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
-    terminos_busqueda, domain_ilike_or,
+    texto_opciones, terminos_busqueda, domain_ilike_or,
 )
 
 app = Flask(__name__)
@@ -48,10 +48,21 @@ def consultar_inventario():
 
         opciones, opciones_texto = formatear_opciones(rows, stock_field)
         mejor = opciones[0]
+
+        # ponytail: GHL cachea el schema de merge tags del nodo webhook cuando se
+        # crea y no expone campos nuevos (opciones_texto nunca aparece en el
+        # picker). En vez de pelear el refresh, reusamos nombre_producto_odoo (ya
+        # expuesto): en el caso con-stock lleva la lista de hasta 3 opciones con
+        # existencia; en cualquier otro caso lleva el nombre unico, para no
+        # ensuciar los nodos "Sin stock"/"No existe". El nodo "Responder con
+        # stock" en GHL debe renderizar solo {{nombre_producto_odoo}}.
+        en_stock = [o for o in opciones if o["stock_disponible"] > 0][:3]
+        nombre_field = texto_opciones(en_stock) if en_stock else mejor["nombre"]
+
         return jsonify({
             "status": "success",
             "producto_encontrado": True,
-            "nombre_producto_odoo": mejor["nombre"],
+            "nombre_producto_odoo": nombre_field,
             "precio_real": mejor["precio_real"],
             "stock_disponible": mejor["stock_disponible"],
             "opciones": opciones,
