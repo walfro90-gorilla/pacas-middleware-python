@@ -8,8 +8,8 @@ from flask import Flask, request, jsonify
 from lib.auth import require_secret, err
 from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
-    texto_opciones, terminos_busqueda, domain_ilike_or, domain_orden_duplicada,
-    nombre_orden,
+    texto_opciones, terminos_busqueda, domain_ilike_or, domain_borrador_contacto,
+    nombre_orden, lineas_carrito, texto_carrito,
 )
 
 app = Flask(__name__)
@@ -106,43 +106,54 @@ def crear_pedido():
             return err(f"Producto no encontrado en Odoo: {producto}")
         product_id = prods[0]
 
-        # 3. Dedup: si el contacto ya tiene un borrador con ese mismo producto,
-        # devolvemos ese numero en vez de escribir otra orden. GHL puede repetir el
-        # trigger (o alguien le da Test Request, que escribe de verdad en Odoo) y
-        # sin esta guarda cada disparo deja una orden extra.
+        # 3. El borrador del contacto ES el carrito: si ya hay uno le agregamos la
+        # linea en vez de abrir otra orden, y si ese producto ya estaba no tocamos
+        # nada. Asi el cliente puede ir apartando varias pacas en un solo pedido, y
+        # de paso quedan cubiertos los disparos repetidos de GHL (o un Test Request,
+        # que escribe de verdad en Odoo): repetir la misma llamada no duplica.
         # ponytail: no cubre dos requests simultaneos — ambos pasarian el search
-        # antes de que cualquiera cree. Cubre el caso real, que son disparos
+        # antes de que cualquiera escriba. Cubre el caso real, que son disparos
         # repetidos con segundos de diferencia; un lock no vale la complejidad.
-        previas = execute(
+        linea = (0, 0, {"product_id": product_id, "product_uom_qty": 1})
+        borradores = execute(
             models, uid, "sale.order", "search",
-            domain_orden_duplicada(partner_id, product_id),
-            limit=1,
+            domain_borrador_contacto(partner_id), limit=1,
         )
-        if previas:
-            # Mismos 4 campos que la rama de exito: el nodo webhook de GHL congela
-            # el schema de merge tags al crearse y no puede tener campos distintos
-            # segun la rama.
-            return jsonify({
-                "status": "success",
-                "pedido_creado": False,
-                "numero_orden": nombre_orden(models, uid, previas[0]),
-                "mensaje": "Ya existe una orden en borrador con ese producto",
-            }), 200
+        if borradores:
+            order_id = borradores[0]
+            ya_estaba = any(
+                pid == product_id for pid, _, _ in lineas_carrito(models, uid, order_id)
+            )
+            if not ya_estaba:
+                execute(
+                    models, uid, "sale.order", "write",
+                    [order_id], {"order_line": [linea]},
+                )
+            pedido_creado, linea_agregada = False, not ya_estaba
+        else:
+            order_id = execute(
+                models, uid, "sale.order", "create",
+                {"partner_id": partner_id, "order_line": [linea]},
+            )
+            pedido_creado, linea_agregada = True, True
 
-        # 4. Crear sale.order con una linea.
-        order_id = execute(
-            models, uid, "sale.order", "create",
-            {
-                "partner_id": partner_id,
-                "order_line": [(0, 0, {"product_id": product_id, "product_uom_qty": 1})],
-            },
-        )
-
+        # 4. Devolver el carrito completo. Estos 7 campos salen SIEMPRE y son los
+        # mismos en las tres ramas: GHL archiva el schema de merge tags cuando se
+        # crea el nodo, y un campo que no venga en ese primer test no aparece nunca
+        # mas en el picker. Ver A6/A8 de GHL_SETUP.md.
+        lineas = lineas_carrito(models, uid, order_id)
         return jsonify({
             "status": "success",
-            "pedido_creado": True,
+            "pedido_creado": pedido_creado,
+            "linea_agregada": linea_agregada,
             "numero_orden": nombre_orden(models, uid, order_id),
-            "mensaje": "Orden creada con exito",
+            "articulos": len(lineas),
+            "carrito_texto": texto_carrito(lineas),
+            "mensaje": (
+                "Pedido creado con exito" if pedido_creado
+                else "Producto agregado al pedido" if linea_agregada
+                else "Ese producto ya estaba en el pedido"
+            ),
         }), 200
     except Exception as e:
         return err(e)
@@ -163,51 +174,72 @@ if __name__ == "__main__":
     ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
     assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
 
-    # --- Dedup de crear_pedido, con un Odoo falso ---
-    # Lo unico que importa verificar: con un borrador previo NO se llama create.
-    # nombre_orden vive en lib.odoo y usa el execute de ese modulo, asi que hay que
-    # parchar los dos bindings (aqui esta importado por valor).
+    # --- Carrito de crear_pedido, con un Odoo falso ---
+    # nombre_orden y lineas_carrito viven en lib.odoo y usan el execute de ESE
+    # modulo, asi que hay que parchar los dos bindings (aqui esta importado por valor).
     from lib import odoo as _odoo
 
+    _NOMBRES = {42: "CAMISA HOMBRE", 43: "PLAYERA HOMBRE"}
     _llamadas = []
-    _borrador_previo = []
+    _carrito = []       # [(product_id, nombre, cantidad)] del borrador
+    _producto_id = 42   # lo que devuelve la busqueda de producto
 
     def _fake_execute(models, uid, model, method, *args, **kwargs):
         _llamadas.append((model, method))
         if model == "res.partner":
             return [7]
         if model == "product.product":
-            return [42]
+            return [_producto_id]
         if model == "sale.order" and method == "search":
-            return _borrador_previo
-        if model == "sale.order" and method == "create":
-            return 123
+            return [99] if _carrito else []
+        if model == "sale.order" and method in ("create", "write"):
+            _carrito.append((_producto_id, _NOMBRES[_producto_id], 1))
+            return 99 if method == "create" else True
         if model == "sale.order" and method == "read":
-            return [{"name": "S00042" if args[0] == [99] else "S00123"}]
+            return [{"name": "S00042"}]
+        if model == "sale.order.line" and method == "search_read":
+            return [
+                {"product_id": [pid, nom], "product_uom_qty": cant}
+                for pid, nom, cant in _carrito
+            ]
         raise AssertionError(f"llamada inesperada: {model}.{method}")
 
     globals()["execute"] = _fake_execute
     globals()["odoo_connect"] = lambda: (1, None)
     _odoo.execute = _fake_execute
-    _pedido = {"telefono": "5215500000000", "producto_interes": "ACCESORIOS / AGUILA"}
     _post = lambda: c.post(
-        "/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json=_pedido
+        "/api/ghl/crear_pedido",
+        headers={"X-API-Secret": "s3cr3t"},
+        json={"telefono": "5215500000000", "producto_interes": "hombre"},
     ).get_json()
 
-    # Ya hay borrador con ese producto: devuelve el existente y no escribe.
-    _borrador_previo = [99]
+    # 1. Sin borrador previo: crea el pedido con una linea.
     r = _post()
-    assert r["pedido_creado"] is False and r["numero_orden"] == "S00042", r
+    assert r["pedido_creado"] is True and r["linea_agregada"] is True, r
+    assert r["articulos"] == 1 and r["numero_orden"] == "S00042", r
+    assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
+
+    # 2. Ya hay borrador y el producto es otro: agrega linea, NO crea otra orden.
+    _llamadas.clear()
+    _producto_id = 43
+    r = _post()
+    assert r["pedido_creado"] is False and r["linea_agregada"] is True, r
+    assert r["articulos"] == 2, r
+    assert r["carrito_texto"] == "1. CAMISA HOMBRE\n2. PLAYERA HOMBRE", r
     assert ("sale.order", "create") not in _llamadas, _llamadas
 
-    # Sin borrador previo: crea normal.
+    # 3. El producto ya estaba: no escribe nada (disparo repetido de GHL).
     _llamadas.clear()
-    _borrador_previo = []
     r = _post()
-    assert r["pedido_creado"] is True and r["numero_orden"] == "S00123", r
-    assert ("sale.order", "create") in _llamadas, _llamadas
+    assert r["pedido_creado"] is False and r["linea_agregada"] is False, r
+    assert r["articulos"] == 2, r
+    assert ("sale.order", "write") not in _llamadas, _llamadas
+    assert ("sale.order", "create") not in _llamadas, _llamadas
 
-    # Las dos ramas exponen los mismos campos (GHL congela el schema del webhook).
-    assert set(r) == {"status", "pedido_creado", "numero_orden", "mensaje"}, r
+    # Los 7 campos salen siempre e iguales (GHL congela el schema del webhook).
+    assert set(r) == {
+        "status", "pedido_creado", "linea_agregada", "numero_orden",
+        "articulos", "carrito_texto", "mensaje",
+    }, r
 
     print("ok")

@@ -49,15 +49,10 @@ def domain_ilike_or(campo, terminos):
     return ["|"] * (len(condiciones) - 1) + condiciones
 
 
-def domain_orden_duplicada(partner_id, product_id):
-    """Domain del borrador que ese contacto ya levanto con ese mismo producto.
-    Odoo atraviesa la one2many con punto (order_line.product_id), y una lista de
-    condiciones sin operadores es AND implicito."""
-    return [
-        ["partner_id", "=", partner_id],
-        ["state", "=", "draft"],
-        ["order_line.product_id", "=", product_id],
-    ]
+def domain_borrador_contacto(partner_id):
+    """Domain del borrador abierto de ese contacto: su carrito. Una lista de
+    condiciones sin operadores es AND implicito en Odoo."""
+    return [["partner_id", "=", partner_id], ["state", "=", "draft"]]
 
 
 def odoo_connect():
@@ -80,6 +75,29 @@ def nombre_orden(models, uid, order_id):
     """Numero visible de la orden (S00042). Cae al id si Odoo no devuelve name."""
     order = execute(models, uid, "sale.order", "read", [order_id], fields=["name"])
     return order[0].get("name") if order else str(order_id)
+
+
+def lineas_carrito(models, uid, order_id):
+    """Lineas del borrador como [(product_id, nombre, cantidad)]. Odoo devuelve
+    product_id como [id, nombre], o False si la linea no tiene producto."""
+    filas = execute(
+        models, uid, "sale.order.line", "search_read",
+        [["order_id", "=", order_id]],
+        fields=["product_id", "product_uom_qty"],
+    )
+    lineas = []
+    for f in filas:
+        prod = f.get("product_id") or [0, ""]
+        lineas.append((prod[0], prod[1], int(num(f.get("product_uom_qty")))))
+    return lineas
+
+
+def texto_carrito(lineas):
+    """Carrito numerado para que el bot lo lea de vuelta al cliente."""
+    return "\n".join(
+        f"{i}. {nombre}" + (f" x{cant}" if cant != 1 else "")
+        for i, (_, nombre, cant) in enumerate(lineas, 1)
+    )
 
 
 def num(v):
@@ -128,13 +146,14 @@ if __name__ == "__main__":
     assert domain_ilike_or("name", ["x"]) == [["name", "ilike", "x"]]
     assert domain_ilike_or("name", ["x", "y"]) == ["|", ["name", "ilike", "x"], ["name", "ilike", "y"]]
 
-    # domain_orden_duplicada: AND implicito; acota a borrador y al mismo producto,
-    # no a cualquier orden del contacto (pedir otro producto si es orden nueva).
-    assert domain_orden_duplicada(7, 42) == [
-        ["partner_id", "=", 7],
-        ["state", "=", "draft"],
-        ["order_line.product_id", "=", 42],
-    ]
+    # domain_borrador_contacto: AND implicito, solo el borrador abierto.
+    assert domain_borrador_contacto(7) == [["partner_id", "=", 7], ["state", "=", "draft"]]
+
+    # texto_carrito: numera desde 1 y omite "x1" (el caso normal, una paca).
+    assert texto_carrito([(1, "CAMISA HOMBRE", 1), (2, "PLAYERA HOMBRE", 3)]) == (
+        "1. CAMISA HOMBRE\n2. PLAYERA HOMBRE x3"
+    )
+    assert texto_carrito([]) == ""
 
     # texto_opciones: numera desde 1, precio sin decimales, una linea por opcion.
     _ops = [

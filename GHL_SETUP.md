@@ -67,36 +67,54 @@ si va vacío se usa el teléfono como nombre):
 }
 ```
 
-Response:
+Response — **siempre estos 7 campos**, en las tres ramas:
 ```json
 {
   "status": "success",
   "pedido_creado": true,
+  "linea_agregada": true,
   "numero_orden": "S22458",
-  "mensaje": "Orden creada con exito"
+  "articulos": 2,
+  "carrito_texto": "1. CAMISA HOMBRE\n2. PLAYERA HOMBRE x3",
+  "mensaje": "Pedido creado con exito"
 }
 ```
 
-Busca el contacto en Odoo por `phone` **o** `mobile`; si no existe lo crea. Luego crea
-un `sale.order` en borrador con **1 sola línea, cantidad 1**.
+Busca el contacto en Odoo por `phone` **o** `mobile`; si no existe lo crea.
 
-**Deduplica** (desde 2026-08-26): antes de crear busca un borrador de ese mismo contacto
-que ya lleve ese mismo producto. Si lo encuentra **no escribe nada** y devuelve el número
-existente con `pedido_creado:false`:
+### El borrador de Odoo es el carrito
 
-```json
-{
-  "status": "success",
-  "pedido_creado": false,
-  "numero_orden": "S22458",
-  "mensaje": "Ya existe una orden en borrador con ese producto"
-}
-```
+No hay almacenamiento aparte: el `sale.order` **en borrador** del contacto *es* el
+carrito. Cada llamada agrega una línea a ese mismo borrador, así que el cliente puede ir
+apartando varias pacas en un solo pedido. Tres ramas posibles:
 
-Las dos ramas devuelven **los mismos 4 campos** a propósito — el nodo webhook de GHL
-congela el schema de merge tags al crearse y no admite campos distintos según la rama.
-Pedir un producto **distinto** sí levanta una orden nueva: la guarda es contra disparos
-repetidos, no contra un segundo pedido legítimo.
+| Situación | `pedido_creado` | `linea_agregada` | Escribe en Odoo | `mensaje` |
+|---|---|---|---|---|
+| El contacto no tenía borrador | `true` | `true` | crea la orden | Pedido creado con exito |
+| Ya tenía borrador, producto nuevo | `false` | `true` | agrega la línea | Producto agregado al pedido |
+| Ya tenía borrador, mismo producto | `false` | `false` | **nada** | Ese producto ya estaba en el pedido |
+
+La tercera fila es la que hace inofensivos los disparos repetidos de GHL: repetir la
+misma llamada **no** duplica nada. Antes (hasta 2026-08-26) cada disparo levantaba una
+orden nueva.
+
+`articulos` es cuántas líneas lleva el carrito y `carrito_texto` es la lista numerada
+lista para que el bot la lea de vuelta (*"llevas: 1. … 2. …"*). Las cantidades salen sin
+`x1` porque una paca es el caso normal.
+
+> ⚠️ **Los 7 campos salen siempre, iguales en las tres ramas, a propósito.** GHL archiva
+> el schema de merge tags cuando se crea el nodo y no lo refresca nunca (ver A6), así que
+> un campo que no venga desde el primer test no aparece jamás en el picker. Las
+> respuestas de **error** sí son la excepción: traen sólo `status` y `mensaje`, igual que
+> en `consultar_inventario`. Al archivar la respuesta de prueba, **archiva una del camino
+> feliz**, no una de error (misma trampa de A4).
+
+> 🔴 **Todavía sin resolver: cuál producto exacto entra al carrito.**
+> `producto_interes` se resuelve con la misma búsqueda difusa que `consultar_inventario`,
+> tomando el primer match (`limit=1`). Si el bot mostró 2-3 opciones y el cliente eligió
+> "la 2", mandar `{{contact.qu_producto_te_interesa}}` (el término original, ej.
+> "hombre") mete al carrito un producto arbitrario, no el que eligió. Hay que pasar el
+> **nombre exacto** que aceptó el cliente. Ver A8.
 
 ---
 
@@ -255,33 +273,50 @@ inventario, simplemente ejecútalo y CALLA para que el sistema tome el control."
 
 ### A8. Crear el pedido — pendiente
 
-`crear_pedido` **no está conectado**. Sería otro Custom Webhook igual, cambiando URL y
-cuerpo:
+`crear_pedido` **no está conectado**. Sería otro Custom Webhook igual al de A3, cambiando
+URL y cuerpo. El middleware ya está listo (carrito + antiduplicados, 2026-08-26); lo que
+falta es armar el nodo.
 
 **URL:** `https://pacas-middleware-python.vercel.app/api/ghl/crear_pedido`
 
+| Campo | Valor |
+|---|---|
+| **Evento** | `CUSTOM` |
+| **Método** | `POST` |
+| **Autorización** | None |
+| **Encabezados** | `X-API-Secret: {{custom_values.api_secret}}` |
+| **Tipo de contenido** | `application/json` |
+
 ```json
-{
-  "telefono": "{{contact.phone}}",
-  "nombre_cliente": "{{contact.name}}",
-  "producto_interes": "{{contact.qu_producto_te_interesa}}"
-}
+{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "<<el nombre exacto que acepto el cliente>>"}
 ```
 
-> ⚠️ Esto **escribe en Odoo**: crea contacto (si el teléfono no existe) y crea la orden.
-> Test Request **escribe de verdad** — el primer disparo deja una orden real.
->
-> Desde 2026-08-26 el middleware **deduplica del lado del servidor**: si ese contacto ya
-> tiene un borrador con ese producto, devuelve el número existente con
-> `pedido_creado:false` en vez de crear otra. Ya no hace falta el tag de una sola vez ni
-> la condición "solo si `numero_orden` está vacío". Lo que **no** cubre: dos requests
-> simultáneos (los dos pasarían la búsqueda antes de que cualquiera escriba) y un
-> producto distinto del mismo contacto, que sí es una orden nueva a propósito.
+> 🛑 **`producto_interes` NO puede ser `{{contact.qu_producto_te_interesa}}`.** Ese
+> campo guarda el término grueso con el que el cliente empezó ("hombre", "caballero"), y
+> el middleware lo resuelve con la misma búsqueda difusa tomando el primer match. Si el
+> nodo "Con stock" le mostró 2-3 opciones y el cliente eligió "la 2", esto mete al carrito
+> un producto arbitrario — no el que eligió. **Hay que resolver de dónde sale el nombre
+> exacto antes de armar el nodo.** Y no sirve guardarlo en `¿Qué Producto Te Interesa?`:
+> la acción *Información de Contacto* sólo llena campos **vacíos** (ver A2).
 
-> 💡 **Al crear el nodo, mételo con los 4 campos de respuesta desde el principio**
-> (`status`, `pedido_creado`, `numero_orden`, `mensaje`). GHL archiva el schema de merge
-> tags **cuando se crea el nodo** y no lo refresca nunca; un campo que no esté en ese
-> primer test no aparece después en el picker. Es la misma trampa de A6.
+**Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
+salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo
+acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
+
+> ⚠️ Esto **escribe en Odoo**: crea el contacto (si el teléfono no existe) y crea o
+> amplía la orden. Test Request **escribe de verdad** — el primer disparo deja una orden
+> real. Repetirlo con el mismo producto ya no duplica nada (ver arriba), pero el primero
+> sí queda.
+
+> 💡 **Crea el nodo con los 7 campos de respuesta desde el principio**
+> (`status`, `pedido_creado`, `linea_agregada`, `numero_orden`, `articulos`,
+> `carrito_texto`, `mensaje`) y **archiva una respuesta del camino feliz**, no una de
+> error — las de error traen sólo 2 llaves. GHL congela el schema de merge tags cuando se
+> crea el nodo y no lo refresca nunca: un campo que falte en ese primer test no aparece
+> después en el picker. Misma trampa de A4 y A6.
+
+Para responderle al cliente, `carrito_texto` trae el pedido completo numerado — sirve
+para el *"llevas: 1. … 2. … ¿algo más?"* sin tener que armar la lista en el prompt.
 
 ### A9. Trampas de la UI de GHL
 

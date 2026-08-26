@@ -200,10 +200,14 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] `consultar_inventario` conectado en GHL — ver [GHL_SETUP.md § Parte A](GHL_SETUP.md#parte-a--lo-que-está-armado-en-ghl)
 - [ ] **Conectar el número de WhatsApp** en la sub-cuenta — es lo único que falta para que responda; sin canal provisionado el workflow corre pero el mensaje no sale
 - [ ] Probar end-to-end con un mensaje real y revisar los *Registros de ejecución*
-- [ ] `crear_pedido` sigue sin workflow — sólo se conectó la consulta
+- [ ] `crear_pedido` sigue sin workflow — sólo se conectó la consulta. **Bloqueado**: hay
+  que decidir de dónde sale el nombre exacto del producto que eligió el cliente; mandar
+  `{{contact.qu_producto_te_interesa}}` mete al carrito un producto arbitrario cuando el
+  bot mostró varias opciones. Ver [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--pendiente)
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
-- [x] `crear_pedido` deduplica del lado del servidor (2026-08-26) — si el contacto ya
-  tiene un borrador con ese producto devuelve el número existente con
-  `pedido_creado:false` en vez de crear otra orden. No cubre requests simultáneos; un
-  producto distinto sí es orden nueva a propósito
+- [x] `crear_pedido` es un carrito (2026-08-26) — el `sale.order` en borrador del contacto
+  *es* el carrito: cada llamada le agrega una línea, así que varias pacas caben en un solo
+  pedido. Si el producto ya estaba no escribe nada, con lo que los disparos repetidos de
+  GHL dejan de duplicar órdenes. Devuelve `carrito_texto` con el pedido numerado. No cubre
+  requests simultáneos
