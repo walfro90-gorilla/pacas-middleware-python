@@ -80,6 +80,24 @@ Response:
 Busca el contacto en Odoo por `phone` **o** `mobile`; si no existe lo crea. Luego crea
 un `sale.order` en borrador con **1 sola línea, cantidad 1**.
 
+**Deduplica** (desde 2026-08-26): antes de crear busca un borrador de ese mismo contacto
+que ya lleve ese mismo producto. Si lo encuentra **no escribe nada** y devuelve el número
+existente con `pedido_creado:false`:
+
+```json
+{
+  "status": "success",
+  "pedido_creado": false,
+  "numero_orden": "S22458",
+  "mensaje": "Ya existe una orden en borrador con ese producto"
+}
+```
+
+Las dos ramas devuelven **los mismos 4 campos** a propósito — el nodo webhook de GHL
+congela el schema de merge tags al crearse y no admite campos distintos según la rama.
+Pedir un producto **distinto** sí levanta una orden nueva: la guarda es contra disparos
+repetidos, no contra un segundo pedido legítimo.
+
 ---
 
 ## Parte A — Lo que está armado en GHL
@@ -251,10 +269,19 @@ cuerpo:
 ```
 
 > ⚠️ Esto **escribe en Odoo**: crea contacto (si el teléfono no existe) y crea la orden.
-> No lo pongas detrás de un trigger que pueda dispararse dos veces con el mismo contacto
-> — no hay deduplicación, dos disparos = dos órdenes. Un tag de una sola vez o una
-> condición "solo si `numero_orden` está vacío" evita el doble pedido. Tampoco le
-> dispares Test Request: el test escribe de verdad.
+> Test Request **escribe de verdad** — el primer disparo deja una orden real.
+>
+> Desde 2026-08-26 el middleware **deduplica del lado del servidor**: si ese contacto ya
+> tiene un borrador con ese producto, devuelve el número existente con
+> `pedido_creado:false` en vez de crear otra. Ya no hace falta el tag de una sola vez ni
+> la condición "solo si `numero_orden` está vacío". Lo que **no** cubre: dos requests
+> simultáneos (los dos pasarían la búsqueda antes de que cualquiera escriba) y un
+> producto distinto del mismo contacto, que sí es una orden nueva a propósito.
+
+> 💡 **Al crear el nodo, mételo con los 4 campos de respuesta desde el principio**
+> (`status`, `pedido_creado`, `numero_orden`, `mensaje`). GHL archiva el schema de merge
+> tags **cuando se crea el nodo** y no lo refresca nunca; un campo que no esté en ese
+> primer test no aparece después en el picker. Es la misma trampa de A6.
 
 ### A9. Trampas de la UI de GHL
 

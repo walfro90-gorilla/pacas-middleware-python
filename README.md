@@ -203,4 +203,7 @@ con `status:error`, y el body exacto que manda GHL.
 - [ ] `crear_pedido` sigue sin workflow — sólo se conectó la consulta
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
-- [ ] `crear_pedido` no deduplica: si el trigger de GHL puede repetirse, hace falta guarda
+- [x] `crear_pedido` deduplica del lado del servidor (2026-08-26) — si el contacto ya
+  tiene un borrador con ese producto devuelve el número existente con
+  `pedido_creado:false` en vez de crear otra orden. No cubre requests simultáneos; un
+  producto distinto sí es orden nueva a propósito

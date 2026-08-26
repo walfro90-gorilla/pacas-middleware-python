@@ -8,7 +8,8 @@ from flask import Flask, request, jsonify
 from lib.auth import require_secret, err
 from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
-    texto_opciones, terminos_busqueda, domain_ilike_or,
+    texto_opciones, terminos_busqueda, domain_ilike_or, domain_orden_duplicada,
+    nombre_orden,
 )
 
 app = Flask(__name__)
@@ -105,7 +106,30 @@ def crear_pedido():
             return err(f"Producto no encontrado en Odoo: {producto}")
         product_id = prods[0]
 
-        # 3. Crear sale.order con una linea.
+        # 3. Dedup: si el contacto ya tiene un borrador con ese mismo producto,
+        # devolvemos ese numero en vez de escribir otra orden. GHL puede repetir el
+        # trigger (o alguien le da Test Request, que escribe de verdad en Odoo) y
+        # sin esta guarda cada disparo deja una orden extra.
+        # ponytail: no cubre dos requests simultaneos — ambos pasarian el search
+        # antes de que cualquiera cree. Cubre el caso real, que son disparos
+        # repetidos con segundos de diferencia; un lock no vale la complejidad.
+        previas = execute(
+            models, uid, "sale.order", "search",
+            domain_orden_duplicada(partner_id, product_id),
+            limit=1,
+        )
+        if previas:
+            # Mismos 4 campos que la rama de exito: el nodo webhook de GHL congela
+            # el schema de merge tags al crearse y no puede tener campos distintos
+            # segun la rama.
+            return jsonify({
+                "status": "success",
+                "pedido_creado": False,
+                "numero_orden": nombre_orden(models, uid, previas[0]),
+                "mensaje": "Ya existe una orden en borrador con ese producto",
+            }), 200
+
+        # 4. Crear sale.order con una linea.
         order_id = execute(
             models, uid, "sale.order", "create",
             {
@@ -113,13 +137,11 @@ def crear_pedido():
                 "order_line": [(0, 0, {"product_id": product_id, "product_uom_qty": 1})],
             },
         )
-        order = execute(models, uid, "sale.order", "read", [order_id], fields=["name"])
-        numero_orden = order[0].get("name") if order else str(order_id)
 
         return jsonify({
             "status": "success",
             "pedido_creado": True,
-            "numero_orden": numero_orden,
+            "numero_orden": nombre_orden(models, uid, order_id),
             "mensaje": "Orden creada con exito",
         }), 200
     except Exception as e:
@@ -140,4 +162,52 @@ if __name__ == "__main__":
 
     ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
     assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
+
+    # --- Dedup de crear_pedido, con un Odoo falso ---
+    # Lo unico que importa verificar: con un borrador previo NO se llama create.
+    # nombre_orden vive en lib.odoo y usa el execute de ese modulo, asi que hay que
+    # parchar los dos bindings (aqui esta importado por valor).
+    from lib import odoo as _odoo
+
+    _llamadas = []
+    _borrador_previo = []
+
+    def _fake_execute(models, uid, model, method, *args, **kwargs):
+        _llamadas.append((model, method))
+        if model == "res.partner":
+            return [7]
+        if model == "product.product":
+            return [42]
+        if model == "sale.order" and method == "search":
+            return _borrador_previo
+        if model == "sale.order" and method == "create":
+            return 123
+        if model == "sale.order" and method == "read":
+            return [{"name": "S00042" if args[0] == [99] else "S00123"}]
+        raise AssertionError(f"llamada inesperada: {model}.{method}")
+
+    globals()["execute"] = _fake_execute
+    globals()["odoo_connect"] = lambda: (1, None)
+    _odoo.execute = _fake_execute
+    _pedido = {"telefono": "5215500000000", "producto_interes": "ACCESORIOS / AGUILA"}
+    _post = lambda: c.post(
+        "/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json=_pedido
+    ).get_json()
+
+    # Ya hay borrador con ese producto: devuelve el existente y no escribe.
+    _borrador_previo = [99]
+    r = _post()
+    assert r["pedido_creado"] is False and r["numero_orden"] == "S00042", r
+    assert ("sale.order", "create") not in _llamadas, _llamadas
+
+    # Sin borrador previo: crea normal.
+    _llamadas.clear()
+    _borrador_previo = []
+    r = _post()
+    assert r["pedido_creado"] is True and r["numero_orden"] == "S00123", r
+    assert ("sale.order", "create") in _llamadas, _llamadas
+
+    # Las dos ramas exponen los mismos campos (GHL congela el schema del webhook).
+    assert set(r) == {"status", "pedido_creado", "numero_orden", "mensaje"}, r
+
     print("ok")

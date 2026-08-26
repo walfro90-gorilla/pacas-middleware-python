@@ -49,6 +49,17 @@ def domain_ilike_or(campo, terminos):
     return ["|"] * (len(condiciones) - 1) + condiciones
 
 
+def domain_orden_duplicada(partner_id, product_id):
+    """Domain del borrador que ese contacto ya levanto con ese mismo producto.
+    Odoo atraviesa la one2many con punto (order_line.product_id), y una lista de
+    condiciones sin operadores es AND implicito."""
+    return [
+        ["partner_id", "=", partner_id],
+        ["state", "=", "draft"],
+        ["order_line.product_id", "=", product_id],
+    ]
+
+
 def odoo_connect():
     """Autentica en Odoo y devuelve (uid, models). Lanza si falla."""
     if not (ODOO_URL and ODOO_DB and ODOO_USER and ODOO_API_KEY):
@@ -63,6 +74,12 @@ def odoo_connect():
 
 def execute(models, uid, model, method, *args, **kwargs):
     return models.execute_kw(ODOO_DB, uid, ODOO_API_KEY, model, method, list(args), kwargs)
+
+
+def nombre_orden(models, uid, order_id):
+    """Numero visible de la orden (S00042). Cae al id si Odoo no devuelve name."""
+    order = execute(models, uid, "sale.order", "read", [order_id], fields=["name"])
+    return order[0].get("name") if order else str(order_id)
 
 
 def num(v):
@@ -110,6 +127,14 @@ if __name__ == "__main__":
     # domain_ilike_or: notacion polaca de Odoo (N terminos -> N-1 '|').
     assert domain_ilike_or("name", ["x"]) == [["name", "ilike", "x"]]
     assert domain_ilike_or("name", ["x", "y"]) == ["|", ["name", "ilike", "x"], ["name", "ilike", "y"]]
+
+    # domain_orden_duplicada: AND implicito; acota a borrador y al mismo producto,
+    # no a cualquier orden del contacto (pedir otro producto si es orden nueva).
+    assert domain_orden_duplicada(7, 42) == [
+        ["partner_id", "=", 7],
+        ["state", "=", "draft"],
+        ["order_line.product_id", "=", 42],
+    ]
 
     # texto_opciones: numera desde 1, precio sin decimales, una linea por opcion.
     _ops = [
