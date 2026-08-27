@@ -288,8 +288,12 @@ falta es armar el nodo.
 | **Tipo de contenido** | `application/json` |
 
 ```json
-{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "{{contact.sucursal_asignada}}", "opcion": "{{message.body}}"}
+{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon", "opcion": "{{message.body}}"}
 ```
+
+`sucursal_asignada` va **fija en `"Jhon"`**, igual que en A3 — tiene que ser la misma de
+la consulta: define el campo de existencia y con el el orden de las opciones. Si aqui
+mandas otra, el numero que eligio el cliente apunta a otra lista.
 
 **`opcion` es cual de las opciones eligio el cliente.** Manda el mensaje del cliente tal
 cual: el middleware le saca el numero (`"la 2"`, `"quiero la 2"` → la 2). Tambien acepta el
