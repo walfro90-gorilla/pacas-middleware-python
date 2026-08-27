@@ -271,7 +271,7 @@ inventario, simplemente ejecútalo y CALLA para que el sistema tome el control."
 > cree que disparó algo y no pasa nada. Así estaba antes (`6d469257-…`, inexistente), y
 > por eso nunca funcionó.
 
-### A8. Crear el pedido — pendiente
+### A8. Crear el pedido — pendiente de conectar
 
 `crear_pedido` **no está conectado**. Sería otro Custom Webhook igual al de A3, cambiando
 URL y cuerpo. El middleware ya está listo (carrito + antiduplicados, 2026-08-26); lo que
@@ -288,16 +288,22 @@ falta es armar el nodo.
 | **Tipo de contenido** | `application/json` |
 
 ```json
-{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "<<el nombre exacto que acepto el cliente>>"}
+{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "{{contact.sucursal_asignada}}", "opcion": "{{message.body}}"}
 ```
 
-> 🛑 **`producto_interes` NO puede ser `{{contact.qu_producto_te_interesa}}`.** Ese
-> campo guarda el término grueso con el que el cliente empezó ("hombre", "caballero"), y
-> el middleware lo resuelve con la misma búsqueda difusa tomando el primer match. Si el
-> nodo "Con stock" le mostró 2-3 opciones y el cliente eligió "la 2", esto mete al carrito
-> un producto arbitrario — no el que eligió. **Hay que resolver de dónde sale el nombre
-> exacto antes de armar el nodo.** Y no sirve guardarlo en `¿Qué Producto Te Interesa?`:
-> la acción *Información de Contacto* sólo llena campos **vacíos** (ver A2).
+**`opcion` es cual de las opciones eligio el cliente.** Manda el mensaje del cliente tal
+cual: el middleware le saca el numero (`"la 2"`, `"quiero la 2"` → la 2). Tambien acepta el
+nombre o un pedazo (`"pantalon"`). Si no entiende nada — o si el merge tag no existe en
+tu version de GHL y lo dejas vacio — cae a la **opcion 1**, que es la de mas stock y la
+primera que el bot lista. O sea: si no logras mandar `opcion`, el nodo igual funciona,
+solo que siempre aparta la primera.
+
+> ✅ **`producto_interes` sí puede ser `{{contact.qu_producto_te_interesa}}`** (resuelto
+> 2026-08-26). Antes no: `crear_pedido` hacía su propia búsqueda con `limit=1` y apartaba
+> un producto arbitrario, que ni siquiera tenía por qué tener stock. Ahora los dos
+> endpoints arman la lista con la **misma** función (`opciones_visibles`: con stock
+> primero, máximo 3), así que el término grueso + el número reconstruyen exactamente lo
+> que el cliente vio. No hace falta campo nuevo ni nodo de reseteo.
 
 **Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
 salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo

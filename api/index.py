@@ -9,7 +9,7 @@ from lib.auth import require_secret, err
 from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
     texto_opciones, terminos_busqueda, domain_ilike_or, domain_borrador_contacto,
-    nombre_orden, lineas_carrito, texto_carrito,
+    nombre_orden, lineas_carrito, texto_carrito, opciones_visibles, elegir_opcion,
 )
 
 app = Flask(__name__)
@@ -57,8 +57,9 @@ def consultar_inventario():
         # existencia; en cualquier otro caso lleva el nombre unico, para no
         # ensuciar los nodos "Sin stock"/"No existe". El nodo "Responder con
         # stock" en GHL debe renderizar solo {{nombre_producto_odoo}}.
-        en_stock = [o for o in opciones if o["stock_disponible"] > 0][:3]
-        nombre_field = texto_opciones(en_stock) if en_stock else mejor["nombre"]
+        visibles = opciones_visibles(rows, stock_field)
+        con_stock = visibles[0]["stock_disponible"] > 0
+        nombre_field = texto_opciones(visibles) if con_stock else mejor["nombre"]
 
         return jsonify({
             "status": "success",
@@ -80,6 +81,8 @@ def crear_pedido():
         telefono = (data.get("telefono") or "").strip()
         nombre = (data.get("nombre_cliente") or "").strip()
         producto = (data.get("producto_interes") or "").strip()
+        sucursal = (data.get("sucursal_asignada") or "").strip()
+        opcion = (data.get("opcion") or "").strip()
         if not telefono or not producto:
             return err("Faltan 'telefono' y/o 'producto_interes'")
 
@@ -96,15 +99,24 @@ def crear_pedido():
             {"name": nombre or telefono, "phone": telefono},
         )
 
-        # 2. Producto por nombre.
-        prods = execute(
-            models, uid, "product.product", "search",
+        # 2. Resolver CUAL de las opciones quiso el cliente. La consulta es la
+        # misma que la de consultar_inventario (mismo domain, mismo orden, mismo
+        # limite), asi que opciones_visibles reconstruye exactamente la lista
+        # numerada que el bot le mostro y "la 2" significa lo mismo en los dos
+        # lados. Un search(limit=1) suelto agarraba un producto arbitrario, que
+        # ni siquiera tenia por que tener stock.
+        stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
+        rows = execute(
+            models, uid, "product.product", "search_read",
             domain_ilike_or("name", terminos_busqueda(producto)),
-            limit=1,
+            fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
+            limit=MAX_OPCIONES,
+            order=f"{stock_field} desc",
         )
-        if not prods:
+        if not rows:
             return err(f"Producto no encontrado en Odoo: {producto}")
-        product_id = prods[0]
+        visibles = opciones_visibles(rows, stock_field)
+        product_id = visibles[elegir_opcion(opcion, visibles)]["id"]
 
         # 3. El borrador del contacto ES el carrito: si ya hay uno le agregamos la
         # linea en vez de abrir otra orden, y si ese producto ya estaba no tocamos
@@ -179,21 +191,36 @@ if __name__ == "__main__":
     # modulo, asi que hay que parchar los dos bindings (aqui esta importado por valor).
     from lib import odoo as _odoo
 
-    _NOMBRES = {42: "CAMISA HOMBRE", 43: "PLAYERA HOMBRE"}
+    # Catalogo falso: como lo devolveria search_read. La SUDADERA esta agotada,
+    # asi que el cliente solo ve dos opciones: 1. CAMISA (9), 2. PLAYERA (7).
+    _CATALOGO = [
+        {"id": 42, "name": "CAMISA HOMBRE", "x_precio_real": 250, "x_existencia_garza": 9},
+        {"id": 43, "name": "PLAYERA HOMBRE", "x_precio_real": 180, "x_existencia_garza": 7},
+        {"id": 44, "name": "SUDADERA HOMBRE", "x_precio_real": 300, "x_existencia_garza": 0},
+    ]
+    _NOMBRES = {p["id"]: p["name"] for p in _CATALOGO}
     _llamadas = []
     _carrito = []       # [(product_id, nombre, cantidad)] del borrador
-    _producto_id = 42   # lo que devuelve la busqueda de producto
+
+    def _product_id_de(args):
+        """El product_id que el handler mando en el order_line. Leerlo de los
+        argumentos reales es lo que prueba que 'la 2' aparto la 2."""
+        for a in args:
+            if isinstance(a, dict) and "order_line" in a:
+                return a["order_line"][0][2]["product_id"]
+        raise AssertionError(f"sin order_line en {args}")
 
     def _fake_execute(models, uid, model, method, *args, **kwargs):
         _llamadas.append((model, method))
         if model == "res.partner":
             return [7]
         if model == "product.product":
-            return [_producto_id]
+            return _CATALOGO
         if model == "sale.order" and method == "search":
             return [99] if _carrito else []
         if model == "sale.order" and method in ("create", "write"):
-            _carrito.append((_producto_id, _NOMBRES[_producto_id], 1))
+            pid = _product_id_de(args)
+            _carrito.append((pid, _NOMBRES[pid], 1))
             return 99 if method == "create" else True
         if model == "sale.order" and method == "read":
             return [{"name": "S00042"}]
@@ -207,26 +234,50 @@ if __name__ == "__main__":
     globals()["execute"] = _fake_execute
     globals()["odoo_connect"] = lambda: (1, None)
     _odoo.execute = _fake_execute
-    _post = lambda: c.post(
-        "/api/ghl/crear_pedido",
-        headers={"X-API-Secret": "s3cr3t"},
-        json={"telefono": "5215500000000", "producto_interes": "hombre"},
-    ).get_json()
 
-    # 1. Sin borrador previo: crea el pedido con una linea.
+    def _post(opcion=""):
+        return c.post(
+            "/api/ghl/crear_pedido",
+            headers={"X-API-Secret": "s3cr3t"},
+            json={
+                "telefono": "5215500000000",
+                "producto_interes": "hombre",
+                "opcion": opcion,
+            },
+        ).get_json()
+
+    # 1. Sin opcion: cae a la 1, que es la de mas stock — la misma que el bot
+    #    lista primero. Antes un search(limit=1) devolvia cualquier cosa.
     r = _post()
     assert r["pedido_creado"] is True and r["linea_agregada"] is True, r
     assert r["articulos"] == 1 and r["numero_orden"] == "S00042", r
     assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
 
-    # 2. Ya hay borrador y el producto es otro: agrega linea, NO crea otra orden.
+    # 2. "la 2" aparta la SEGUNDA que vio el cliente (PLAYERA), no la segunda
+    #    del catalogo crudo. Agrega linea al mismo borrador, no crea otra orden.
     _llamadas.clear()
-    _producto_id = 43
-    r = _post()
+    r = _post("la 2")
     assert r["pedido_creado"] is False and r["linea_agregada"] is True, r
     assert r["articulos"] == 2, r
-    assert r["carrito_texto"] == "1. CAMISA HOMBRE\n2. PLAYERA HOMBRE", r
+    assert r["carrito_texto"].splitlines() == [
+        "1. CAMISA HOMBRE", "2. PLAYERA HOMBRE",
+    ], r
     assert ("sale.order", "create") not in _llamadas, _llamadas
+
+    # 3. La misma opcion otra vez: no escribe nada (disparo repetido de GHL).
+    _llamadas.clear()
+    r = _post("la 2")
+    assert r["pedido_creado"] is False and r["linea_agregada"] is False, r
+    assert r["articulos"] == 2, r
+    assert ("sale.order", "write") not in _llamadas, _llamadas
+    assert ("sale.order", "create") not in _llamadas, _llamadas
+
+    # 4. La opcion agotada NO es alcanzable por numero: solo hay 2 visibles, asi
+    #    que "3" cae a la 1 y no aparta una paca que no hay.
+    _llamadas.clear()
+    r = _post("3")
+    assert r["linea_agregada"] is False and r["articulos"] == 2, r
+
 
     # 3. El producto ya estaba: no escribe nada (disparo repetido de GHL).
     _llamadas.clear()
@@ -241,5 +292,18 @@ if __name__ == "__main__":
         "status", "pedido_creado", "linea_agregada", "numero_orden",
         "articulos", "carrito_texto", "mensaje",
     }, r
+
+    # El assert que ata los dos endpoints: la lista numerada que consultar_inventario
+    # le muestra al cliente tiene que ser LA MISMA que crear_pedido indexa con
+    # "la 2". Mismo catalogo falso, mismo orden, sin la agotada.
+    inv = c.post(
+        "/api/ghl/consultar_inventario",
+        headers={"X-API-Secret": "s3cr3t"},
+        json={"producto_interes": "hombre"},
+    ).get_json()
+    assert inv["nombre_producto_odoo"].splitlines() == [
+        "1. CAMISA HOMBRE — $250 (9 disponibles)",
+        "2. PLAYERA HOMBRE — $180 (7 disponibles)",
+    ], inv
 
     print("ok")

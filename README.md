@@ -27,7 +27,7 @@ sabe mapear respuestas planas) y exigen el header `X-API-Secret`.
 
 | Entrada | Obligatorio | Notas |
 |---|---|---|
-| `producto_interes` | sí | Búsqueda `ilike` sobre `product.product.name`, toma el primer match |
+| `producto_interes` | sí | Búsqueda `ilike` sobre `product.product.name`. Devuelve hasta 3 opciones **con stock**, la de más stock primero; `nombre_producto_odoo` lleva esa lista ya numerada |
 | `sucursal_asignada` | no | `Jhon` o `Eli`. Cualquier otro valor cae a GARZA sin avisar |
 
 ```json
@@ -41,15 +41,24 @@ Si no hay match devuelve `producto_encontrado:false` con todo en cero — no es 
 | Entrada | Obligatorio | Notas |
 |---|---|---|
 | `telefono` | sí | Busca `res.partner` por `phone` **o** `mobile`; si no existe lo crea |
-| `producto_interes` | sí | Si no hay match devuelve error |
+| `producto_interes` | sí | El mismo término que se le mandó a `consultar_inventario`. Si no hay match devuelve error |
+| `sucursal_asignada` | no | Igual que arriba. Tiene que ser **la misma** de la consulta: define el campo de stock y con él el orden de las opciones |
+| `opcion` | no | Cuál de las opciones eligió el cliente. Acepta el mensaje tal cual (`"la 2"`), el nombre o un pedazo. Vacío o irreconocible → la **1** |
 | `nombre_cliente` | no | Si va vacío usa el teléfono como nombre |
 
 ```json
-{"status":"success","pedido_creado":true,"numero_orden":"S22458","mensaje":"Orden creada con exito"}
+{"status":"success","pedido_creado":false,"linea_agregada":true,"numero_orden":"S22458","articulos":2,"carrito_texto":"1. CAMISA HOMBRE\n2. PLAYERA HOMBRE","mensaje":"Producto agregado al pedido"}
 ```
 
-Crea un `sale.order` en borrador con **una sola línea, cantidad 1**. **No deduplica**:
-dos llamadas con los mismos datos = dos órdenes.
+**El `sale.order` en borrador del contacto es el carrito.** Cada llamada le agrega una
+línea (cantidad 1) en vez de abrir otra orden, así que varias pacas caben en un solo
+pedido. Si ese producto ya estaba, no escribe nada — con eso los disparos repetidos de
+GHL dejan de duplicar. Los **7 campos** de la respuesta salen siempre, iguales en las
+tres ramas: GHL congela el schema de merge tags al crear el nodo.
+
+`opcion` se resuelve contra la misma lista que vio el cliente: los dos endpoints la arman
+con `opciones_visibles()` (con stock primero, máximo 3), así que "la 2" significa lo mismo
+en los dos lados.
 
 ---
 
@@ -200,10 +209,17 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] `consultar_inventario` conectado en GHL — ver [GHL_SETUP.md § Parte A](GHL_SETUP.md#parte-a--lo-que-está-armado-en-ghl)
 - [ ] **Conectar el número de WhatsApp** en la sub-cuenta — es lo único que falta para que responda; sin canal provisionado el workflow corre pero el mensaje no sale
 - [ ] Probar end-to-end con un mensaje real y revisar los *Registros de ejecución*
-- [ ] `crear_pedido` sigue sin workflow — sólo se conectó la consulta. **Bloqueado**: hay
-  que decidir de dónde sale el nombre exacto del producto que eligió el cliente; mandar
-  `{{contact.qu_producto_te_interesa}}` mete al carrito un producto arbitrario cuando el
-  bot mostró varias opciones. Ver [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--pendiente)
+- [x] Resuelto de dónde sale el producto exacto (2026-08-26) — `consultar_inventario` y
+  `crear_pedido` arman la lista con la **misma** función (`opciones_visibles`), así que
+  `{{contact.qu_producto_te_interesa}}` + el número que dijo el cliente (`opcion`)
+  reconstruyen la lista que vio. Sin campo nuevo en GHL ni nodo de reseteo. Antes
+  `crear_pedido` hacía `search(limit=1)` y apartaba un producto arbitrario, posiblemente
+  agotado
+- [ ] **Conectar `crear_pedido` en GHL** — el endpoint está listo, falta armar el Custom
+  Webhook. Receta completa en
+  [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--pendiente-de-conectar). Al crear el
+  nodo, archivar la respuesta con los 7 campos **antes** de escribir mensajes (el schema
+  de merge tags se congela)
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
 - [x] `crear_pedido` es un carrito (2026-08-26) — el `sale.order` en borrador del contacto

@@ -1,4 +1,5 @@
 import os
+import re
 import xmlrpc.client
 
 # --- Config: TODO por env vars en Vercel (nada de secretos en el codigo) ---
@@ -120,6 +121,7 @@ def formatear_opciones(rows, stock_field):
     opciones = sorted(
         (
             {
+                "id": p.get("id"),
                 "nombre": p.get("name") or "",
                 "precio_real": float(num(p.get("x_precio_real"))),
                 "stock_disponible": int(num(p.get(stock_field))),
@@ -130,6 +132,40 @@ def formatear_opciones(rows, stock_field):
         reverse=True,
     )
     return opciones, texto_opciones(opciones)
+
+
+def opciones_visibles(rows, stock_field):
+    """Las opciones que el cliente VIO, en el orden en que las vio: con stock
+    primero y maximo 3. Es la lista que consultar_inventario numera en el
+    mensaje del bot, y contra la que crear_pedido resuelve "la 2". Las dos
+    tienen que salir de aqui: si cada endpoint arma la suya, el numero que
+    eligio el cliente apunta a otro producto.
+    Sin nada en stock cae a la mejor opcion agotada, para no quedarse vacia."""
+    opciones, _ = formatear_opciones(rows, stock_field)
+    con_stock = [o for o in opciones if o["stock_disponible"] > 0][:3]
+    return con_stock or opciones[:1]
+
+
+def elegir_opcion(texto, opciones):
+    """Indice (0-based) de la opcion que eligio el cliente. Acepta el numero que
+    dijo ("2", "la 2", "quiero la 2") o un pedazo del nombre; lo que no se
+    entienda cae a la 1, que es la de mas stock y la primera que lista el bot.
+    ponytail: el numero gana sobre el nombre, asi que "2 pacas de camisa" toma
+    la opcion 2. Si eso estorba, que el bot mande solo el numero."""
+    t = (texto or "").strip().lower()
+    digitos = re.findall(r"[0-9]+", t)
+    if digitos:
+        n = int(digitos[0])
+        if 1 <= n <= len(opciones):
+            return n - 1
+    for i, o in enumerate(opciones):
+        nom = (o["nombre"] or "").lower()
+        # Las dos direcciones: el bot puede mandar el nombre solo ("camisa
+        # hombre"), una frase que lo contiene ("quiero la camisa hombre") o un
+        # pedazo ("camisa"). Nada de esto matchea en un solo sentido.
+        if nom and t and (nom in t or t in nom):
+            return i
+    return 0
 
 
 # ponytail: self-check de la logica de conexion, sin Odoo real.
@@ -165,6 +201,35 @@ if __name__ == "__main__":
         "2. PLAYERA HOMBRE — $180 (8 disponibles)"
     )
     assert texto_opciones([]) == ""
+
+    # opciones_visibles / elegir_opcion: es LA misma lista que ve el cliente.
+    # Si estas dos divergen, "la 2" le aparta un producto que nunca vio.
+    _rows = [
+        {"id": 1, "name": "SUDADERA HOMBRE", "x_precio_real": 100, "x_existencia_garza": 0},
+        {"id": 2, "name": "CAMISA HOMBRE", "x_precio_real": 100, "x_existencia_garza": 9},
+        {"id": 3, "name": "PANTALON HOMBRE", "x_precio_real": 100, "x_existencia_garza": 5},
+        {"id": 4, "name": "PLAYERA HOMBRE", "x_precio_real": 100, "x_existencia_garza": 7},
+    ]
+    _vis = opciones_visibles(_rows, "x_existencia_garza")
+    assert [o["id"] for o in _vis] == [2, 4, 3], _vis  # stock desc, agotado fuera, tope 3
+    # El agotado se cae aunque quepa en el tope de 3: filtro, no truncado.
+    assert [o["id"] for o in opciones_visibles(_rows[:2], "x_existencia_garza")] == [2]
+    assert [o["id"] for o in opciones_visibles(_rows[:1], "x_existencia_garza")] == [1]  # todo agotado: no vacia
+    assert opciones_visibles([], "x_existencia_garza") == []
+
+    # El numero que dijo el cliente indexa esa lista, no la busqueda cruda.
+    assert elegir_opcion("2", _vis) == 1
+    assert elegir_opcion("la 2", _vis) == 1
+    assert elegir_opcion("quiero la 3 porfa", _vis) == 2
+    assert elegir_opcion("1", _vis) == 0
+    assert elegir_opcion("9", _vis) == 0        # fuera de rango: cae a la 1
+    assert elegir_opcion("0", _vis) == 0        # idem
+    assert elegir_opcion(None, _vis) == 0       # sin opcion: la de mas stock
+    assert elegir_opcion("", _vis) == 0
+    assert elegir_opcion("PANTALON HOMBRE", _vis) == 2         # nombre exacto
+    assert elegir_opcion("quiero el PANTALON HOMBRE", _vis) == 2  # nombre dentro de una frase
+    assert elegir_opcion("pantalon", _vis) == 2                # pedazo del nombre
+    assert elegir_opcion("cualquier cosa", _vis) == 0          # nada reconocible: la 1
 
     # Sin la env var, ODOO_URL queda vacia: nadie volvio a meter un default que apunte
     # en silencio al servidor equivocado. (Se salta si la env var si esta puesta.)
