@@ -40,6 +40,7 @@ Están en [`docs/decisions/`](docs/decisions/README.md). Léelas antes de cambia
 - El borrador de `sale.order` es el carrito → [0005](docs/decisions/0005-borrador-de-sale-order-es-el-carrito.md)
 - Self-checks con `assert`, sin pytest → [0006](docs/decisions/0006-self-checks-con-assert.md)
 - Un hook `Stop` corre los self-checks y bloquea el turno si fallan → [0007](docs/decisions/0007-hook-stop-corre-los-self-checks.md)
+- `opcion` va en el query string, no en el cuerpo JSON → [0008](docs/decisions/0008-opcion-por-query-string.md)
 
 Si vas a contradecir una, escribe un ADR nuevo que la supersede. No edites el viejo.
 
@@ -52,6 +53,8 @@ Si vas a contradecir una, escribe un ADR nuevo que la supersede. No edites el vi
 - Un domain **vacío** matchea el primer registro de la tabla, no ninguno. Nunca dejes que
   se construya uno sin condiciones.
 - Odoo devuelve `False` para campos vacíos, no `None` ni `0`. Usa `num()` de `lib/odoo.py`.
+- **GHL interpola los merge tags sin escapar.** Texto libre del cliente dentro de un
+  cuerpo JSON lo rompe; mándalo por query string.
 - La acción *Información de Contacto* de GHL **sólo llena campos vacíos**. Por eso el
   workflow lleva un nodo de reseteo.
 - `ODOO_URL` no tiene default a propósito: un default se queda viejo y apunta en silencio

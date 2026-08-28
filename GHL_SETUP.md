@@ -304,19 +304,25 @@ respuesta del camino feliz con los **7 campos** (orden `S22459` en Odoo staging)
 la consulta: define el campo de existencia y con el el orden de las opciones. Si aqui
 mandas otra, el numero que eligio el cliente apunta a otra lista.
 
-> 🟡 **`opcion` NO va en el cuerpo hoy, y es una limitacion real.** El middleware la
-> acepta (`"la 2"` → la 2, tambien por nombre), pero mandarla como `{{message.body}}`
-> mete el mensaje del cliente **crudo** dentro del JSON. Un mensaje con comillas o saltos
-> de linea rompe el JSON, `get_json(silent=True)` devuelve `None`, el handler ve `{}` y
-> contesta *"Faltan 'producto_interes' y/o la identidad"* — un error que no dice nada de
-> la causa real.
+**`opcion` va en PARÁMETROS DE CONSULTA, nunca en el cuerpo** (resuelto 2026-08-28):
+
+| Clave | Valor |
+|---|---|
+| `opcion` | `{{message.body}}` |
+
+Es el mensaje del cliente tal cual; el middleware le saca el número (`"la 2"`,
+`"quiero la 2"` → la 2) y también acepta el nombre o un pedazo (`"pantalon"`). Si no
+entiende nada, cae a la **opción 1**, que es la de más stock y la primera que lista el bot.
+
+> 🔴 **No lo muevas al cuerpo.** El mensaje es texto libre y GHL interpola los merge tags
+> **sin escapar**: un `si porfa, "la 2"` rompe el JSON entero, y entonces *todos* los
+> campos llegan vacíos. Por query string GHL lo url-encodea y viaja seguro. Ver
+> [ADR 0008](docs/decisions/0008-opcion-por-query-string.md).
 >
-> Sin `opcion`, el nodo **siempre aparta la opcion 1** (la de mas stock, la primera que
-> lista el bot). Funciona, pero si el cliente pide la 2 se le aparta la 1.
->
-> Las dos salidas, cuando se retome: pasar `opcion` por un **parametro de consulta** en
-> vez del cuerpo (GHL lo url-encodea), o que el middleware tolere el cuerpo mal formado y
-> lo reporte como tal en vez de como "faltan campos".
+> Mismo motivo para desconfiar de `nombre_cliente`: `{{contact.name}}` también es texto
+> libre. Un nombre con comilla doble rompería el cuerpo igual. Es raro, y desde 2026-08-28
+> el endpoint al menos lo dice: *"El cuerpo no es JSON valido…"* en vez de *"faltan
+> campos"*.
 
 > ✅ **`producto_interes` sí puede ser `{{contact.qu_producto_te_interesa}}`** (resuelto
 > 2026-08-26). Antes no: `crear_pedido` hacía su propia búsqueda con `limit=1` y apartaba
