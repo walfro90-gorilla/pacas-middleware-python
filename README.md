@@ -221,11 +221,15 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] `crear_pedido` acepta contactos sin teléfono (2026-08-27) — los contactos de
   Facebook Messenger, que es por donde entra el tráfico, no traen ninguno. La identidad
   ahora es `telefono` **o** `contact_id`, y el id de GHL se guarda en `res.partner.ref`
-- [ ] **Conectar `crear_pedido` en GHL** — el endpoint está listo, falta armar el Custom
-  Webhook. Receta completa en
-  [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--pendiente-de-conectar). Al crear el
-  nodo, archivar la respuesta con los 7 campos **antes** de escribir mensajes (el schema
-  de merge tags se congela)
+- [x] **`crear_pedido` conectado en GHL** (2026-08-28) — nodo `#2 Crear pedido Odoo` en la
+  rama *Eligio paca*, con los 7 campos archivados. Ver
+  [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--conectado)
+- [ ] **Pasar `opcion` al nodo A8** — hoy no va en el cuerpo, así que siempre aparta la
+  opción 1. `{{message.body}}` rompe el JSON; la salida es un parámetro de consulta o que
+  el middleware tolere el cuerpo mal formado
+- [ ] **Verificar `{{contact.id}}` en ejecución real** — el Test Request no resuelve merge
+  tags, así que sólo se confirma con una conversación de verdad. Si no resolviera, los
+  contactos de Messenger vuelven a fallar
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
 - [x] `crear_pedido` es un carrito (2026-08-26) — el `sale.order` en borrador del contacto
