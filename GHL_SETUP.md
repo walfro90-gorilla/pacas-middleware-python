@@ -207,11 +207,15 @@ respuesta a esta pregunta, se decidirá la siguiente rama"*.
 > opciones **con existencia** (numerada, con precio y piezas) dentro de
 > `nombre_producto_odoo` — un campo que el picker **ya** expone. En los demás casos
 > (sin stock, no existe) ese campo lleva sólo el nombre único, para no ensuciar esas
-> ramas. **En el nodo "Con stock" la parte del producto debe ser sólo**
-> `{{custom_webhook.1.response.nombre_producto_odoo}}` — borra los merge tags sueltos de
-> `precio_real` / `stock_disponible` de ese nodo (ya vienen dentro de la lista; si los
-> dejas, se renderizan dos veces). Las otras 4 ramas quedan intactas. Ver el comentario
-> `ponytail:` en `api/index.py`.
+> ramas. **Aplicado el 2026-08-26** en el nodo "Con stock": se borraron los merge tags
+> sueltos de `precio_real` / `stock_disponible` (ya vienen dentro de la lista; con ellos
+> puestos, precio y piezas se renderizaban dos veces). La *Pregunta* de ese nodo quedó:
+>
+> ```
+> ¡Sí lo tenemos! {{custom_webhook.1.response.nombre_producto_odoo}} . ¿Cuál de estas te aparto?
+> ```
+>
+> Las otras 4 ramas quedan intactas. Ver el comentario `ponytail:` en `api/index.py`.
 
 > ⚠️ **El canal tiene que estar provisionado.** Al 2026-07-30 WhatsApp **no lo está** en
 > esta sub-cuenta: `Configuración > WhatsApp` muestra la oferta de suscripción ($10/mes,
@@ -268,6 +272,11 @@ Costaron horas; anotadas para el próximo:
   `stock_disponible` no devuelve nada; hay que navegar
   `Custom Webhook > #1 … > Response`.
 - El builder congela el renderer seguido. Guardar acción por acción, no todo al final.
+- **Los deep links al builder cargan en blanco.** Abrir
+  `/automation/workflow/<id>` directo (o recargar esa URL) deja la página vacía: el SPA
+  sólo monta el builder si llegas navegando desde la *Lista de flujos de trabajo*. Nota
+  que la lista es `/automation/workflows` (plural) y el builder `/automation/workflow`
+  (singular).
 
 ---
 
