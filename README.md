@@ -13,6 +13,7 @@ GHL Workflow  ──POST + X-API-Secret──▶  Vercel (Flask)  ──XML-RPC�
 ```
 
 Para configurar el lado de GHL: **[GHL_SETUP.md](GHL_SETUP.md)**.
+Por qué el código es como es: **[docs/decisions/](docs/decisions/README.md)**.
 
 ---
 
@@ -55,35 +56,21 @@ matchea al primer `res.partner` de la base y le colgaría el pedido a un descono
 {"status":"success","pedido_creado":false,"linea_agregada":true,"numero_orden":"S22458","articulos":2,"carrito_texto":"1. CAMISA HOMBRE\n2. PLAYERA HOMBRE","mensaje":"Producto agregado al pedido"}
 ```
 
-**El `sale.order` en borrador del contacto es el carrito.** Cada llamada le agrega una
-línea (cantidad 1) en vez de abrir otra orden, así que varias pacas caben en un solo
-pedido. Si ese producto ya estaba, no escribe nada — con eso los disparos repetidos de
-GHL dejan de duplicar. Los **7 campos** de la respuesta salen siempre, iguales en las
-tres ramas: GHL congela el schema de merge tags al crear el nodo.
+Comportamiento, en corto:
 
-**Identidad del cliente: teléfono si lo hay, si no el `contact_id` de GHL.** Los
-contactos de Facebook Messenger — por donde entra el tráfico real — no traen teléfono,
-así que el id de GHL es lo único estable y se guarda en `res.partner.ref`. Cuando vienen
-los dos se buscan ambos (OR), de modo que un contacto que hoy no tiene teléfono y mañana
-sí cae en el mismo partner en vez de duplicarse; y ese teléfono nuevo se escribe en el
-partner, que es el único momento en que se conoce.
-
-`opcion` se resuelve contra la misma lista que vio el cliente: los dos endpoints la arman
-con `opciones_visibles()` (con stock primero, máximo 3), así que "la 2" significa lo mismo
-en los dos lados.
+- **El `sale.order` en borrador del contacto es el carrito.** Cada llamada agrega una línea
+  (cantidad 1) al mismo pedido; si ese producto ya estaba, no escribe nada.
+  → [ADR 0005](docs/decisions/0005-borrador-de-sale-order-es-el-carrito.md)
+- **`opcion` se resuelve contra la misma lista que vio el cliente**, porque los dos
+  endpoints la arman con `opciones_visibles()` (con stock primero, máximo 3).
+- **Identidad: teléfono si lo hay, si no el `contact_id` de GHL**, guardado en
+  `res.partner.ref`. → [ADR 0004](docs/decisions/0004-identidad-telefono-o-contact-id.md)
+- **Los 7 campos salen siempre**, iguales en las tres ramas.
+  → [ADR 0002](docs/decisions/0002-reusar-campos-expuestos-merge-tags.md)
 
 ---
 
-## Dos decisiones de diseño que hay que entender antes de tocar el código
-
-**1. Los errores de negocio salen como HTTP 200.** `err()` devuelve
-`{"status":"error","mensaje":...}` con código 200 a propósito: si devolviera 4xx/5xx,
-GHL suspende el webhook tras varios fallos. Consecuencia: **quien consuma estos
-endpoints tiene que ramificar por el campo `status`, no por el código HTTP.**
-
-**2. Los fallos de autenticación sí salen como 4xx/5xx.** Es la excepción a lo
-anterior. Un header mal puesto es error de configuración, no de negocio: tiene que
-verse fuerte en los Execution Logs de GHL en vez de pasar como éxito silencioso.
+## Códigos de respuesta
 
 | Código | Significa |
 |---|---|
@@ -91,6 +78,10 @@ verse fuerte en los Execution Logs de GHL en vez de pasar como éxito silencioso
 | `500` | Falta la env var `API_SECRET` en Vercel |
 | `200` + `"status":"error"` | Llegó bien, falló Odoo. `mensaje` trae la causa |
 | `200` + `"status":"success"` | OK |
+
+**Ramifica por el campo `status`, no por el código HTTP.** Los errores de negocio salen
+en 200 a propósito; el porqué está en
+[ADR 0001](docs/decisions/0001-errores-de-negocio-en-http-200.md).
 
 ---
 
