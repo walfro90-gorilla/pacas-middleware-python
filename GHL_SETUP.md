@@ -280,11 +280,11 @@ inventario, simplemente ejecútalo y CALLA para que el sistema tome el control."
 > cree que disparó algo y no pasa nada. Así estaba antes (`6d469257-…`, inexistente), y
 > por eso nunca funcionó.
 
-### A8. Crear el pedido — pendiente de conectar
+### A8. Crear el pedido — conectado
 
-`crear_pedido` **no está conectado**. Sería otro Custom Webhook igual al de A3, cambiando
-URL y cuerpo. El middleware ya está listo (carrito + antiduplicados, 2026-08-26); lo que
-falta es armar el nodo.
+**Armado y probado el 2026-08-28.** Custom Webhook `#2 Crear pedido Odoo`, colgado de la
+rama *Eligio paca* del Conversation AI *Responder con stock*. El Test Request archivó una
+respuesta del camino feliz con los **7 campos** (orden `S22459` en Odoo staging).
 
 **URL:** `https://pacas-middleware-python.vercel.app/api/ghl/crear_pedido`
 
@@ -297,19 +297,26 @@ falta es armar el nodo.
 | **Tipo de contenido** | `application/json` |
 
 ```json
-{"telefono": "{{contact.phone}}", "contact_id": "{{contact.id}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon", "opcion": "{{message.body}}"}
+{"telefono": "{{contact.phone}}", "contact_id": "{{contact.id}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon"}
 ```
 
 `sucursal_asignada` va **fija en `"Jhon"`**, igual que en A3 — tiene que ser la misma de
 la consulta: define el campo de existencia y con el el orden de las opciones. Si aqui
 mandas otra, el numero que eligio el cliente apunta a otra lista.
 
-**`opcion` es cual de las opciones eligio el cliente.** Manda el mensaje del cliente tal
-cual: el middleware le saca el numero (`"la 2"`, `"quiero la 2"` → la 2). Tambien acepta el
-nombre o un pedazo (`"pantalon"`). Si no entiende nada — o si el merge tag no existe en
-tu version de GHL y lo dejas vacio — cae a la **opcion 1**, que es la de mas stock y la
-primera que el bot lista. O sea: si no logras mandar `opcion`, el nodo igual funciona,
-solo que siempre aparta la primera.
+> 🟡 **`opcion` NO va en el cuerpo hoy, y es una limitacion real.** El middleware la
+> acepta (`"la 2"` → la 2, tambien por nombre), pero mandarla como `{{message.body}}`
+> mete el mensaje del cliente **crudo** dentro del JSON. Un mensaje con comillas o saltos
+> de linea rompe el JSON, `get_json(silent=True)` devuelve `None`, el handler ve `{}` y
+> contesta *"Faltan 'producto_interes' y/o la identidad"* — un error que no dice nada de
+> la causa real.
+>
+> Sin `opcion`, el nodo **siempre aparta la opcion 1** (la de mas stock, la primera que
+> lista el bot). Funciona, pero si el cliente pide la 2 se le aparta la 1.
+>
+> Las dos salidas, cuando se retome: pasar `opcion` por un **parametro de consulta** en
+> vez del cuerpo (GHL lo url-encodea), o que el middleware tolere el cuerpo mal formado y
+> lo reporte como tal en vez de como "faltan campos".
 
 > ✅ **`producto_interes` sí puede ser `{{contact.qu_producto_te_interesa}}`** (resuelto
 > 2026-08-26). Antes no: `crear_pedido` hacía su propia búsqueda con `limit=1` y apartaba
@@ -333,8 +340,11 @@ solo que siempre aparta la primera.
 >
 > ⚠️ Con **ninguno** de los dos sigue siendo error a propósito: un domain vacío en Odoo
 > matchea al primer `res.partner` de la base y le colgaría el pedido a un desconocido.
-> Si `{{contact.id}}` no resolviera en tu versión de GHL, el nodo dejaría de funcionar
-> para los contactos sin teléfono — verifícalo en el Test Request antes de publicar.
+>
+> ⚠️ **`{{contact.id}}` no está verificado en ejecución real.** El Test Request no sirve
+> para comprobarlo (ver abajo). Si en producción no resolviera, los contactos de
+> Messenger — que no traen teléfono — volverían a fallar. Se confirma con la primera
+> conversación real: revisar los *Registros de ejecución*.
 
 **Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
 salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo
@@ -344,6 +354,29 @@ acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
 > amplía la orden. Test Request **escribe de verdad** — el primer disparo deja una orden
 > real. Repetirlo con el mismo producto ya no duplica nada (ver arriba), pero el primero
 > sí queda.
+
+> 🔴 **El Test Request NO resuelve los merge tags.** Medido el 2026-08-28: con
+> `{{contact.qu_producto_te_interesa}}` y `{{contact.id}}` en el cuerpo, el endpoint
+> recibe los campos vacíos y contesta el error de 2 llaves — aunque el contacto tenga
+> esos datos llenos (se verificó poniéndole `hombre` al campo de Walfre antes de probar).
+> Con los **mismos** campos en literal, la misma petición devuelve los 7 campos. No es el
+> middleware: es que la prueba manda el cuerpo sin interpolar.
+>
+> **Receta para archivar el schema bueno**, que es lo único que la prueba sirve para:
+>
+> 1. Poner el cuerpo con **valores literales** que sí produzcan camino feliz
+>    (ej. `{"telefono": "521...", "producto_interes": "hombre", "sucursal_asignada": "Jhon"}`).
+> 2. Seleccionar contacto, *Envíe una solicitud de prueba*, y **verificar en el CUERPO de
+>    la respuesta que salgan los 7 campos** antes de tocar nada. `content-length` lo
+>    delata: ~114 bytes es el error de 2 llaves, ~207 es el camino feliz.
+> 3. **Guardar acción** de inmediato: eso congela el schema.
+> 4. Volver a abrir el nodo, cambiar el cuerpo a los merge tags de producción y guardar
+>    otra vez. **No exige repetir la prueba**, así que el schema bueno se conserva.
+>
+> Ojo con el orden: entre el paso 3 y el 4 el nodo queda vivo con el cuerpo de prueba. Si
+> el workflow está publicado, hazlo seguido.
+>
+> *El botón "Vuelva a probar" limpia el contacto seleccionado; hay que volver a elegirlo.*
 
 > 💡 **Crea el nodo con los 7 campos de respuesta desde el principio**
 > (`status`, `pedido_creado`, `linea_agregada`, `numero_orden`, `articulos`,
