@@ -309,6 +309,19 @@ solo que siempre aparta la primera.
 > primero, máximo 3), así que el término grueso + el número reconstruyen exactamente lo
 > que el cliente vio. No hace falta campo nuevo ni nodo de reseteo.
 
+> 🛑 **Bloqueado por el teléfono (2026-08-27).** El Test Request exige un contacto, y
+> `crear_pedido` exige `telefono`: sin él devuelve el error de 2 llaves, que es
+> justamente el schema que NO hay que archivar. **Los contactos de Messenger no traen
+> teléfono.** En la sub-cuenta hay 5 contactos y sólo *Tania Mercado* tiene uno; el de
+> pruebas, *Walfre Aguilar* (`QLPsCRicX5FLw6UL4bTk`), lo tiene vacío — en su propia
+> conversación el bot le pidió el número y contestó *"por aquí"*.
+>
+> Para desbloquear el nodo basta ponerle un teléfono a ese contacto. Pero el problema de
+> fondo es del flujo, no de la prueba: si el tráfico real entra por Facebook Messenger,
+> la mayoría de los leads llegará sin teléfono y `crear_pedido` los rechazará. Las dos
+> salidas son: (a) que el bot pida el teléfono **antes** de apartar, o (b) que el
+> middleware acepte el id de contacto de GHL como identidad alterna del partner.
+
 **Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
 salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo
 acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
