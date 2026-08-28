@@ -288,7 +288,7 @@ falta es armar el nodo.
 | **Tipo de contenido** | `application/json` |
 
 ```json
-{"telefono": "{{contact.phone}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon", "opcion": "{{message.body}}"}
+{"telefono": "{{contact.phone}}", "contact_id": "{{contact.id}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon", "opcion": "{{message.body}}"}
 ```
 
 `sucursal_asignada` va **fija en `"Jhon"`**, igual que en A3 — tiene que ser la misma de
@@ -309,18 +309,23 @@ solo que siempre aparta la primera.
 > primero, máximo 3), así que el término grueso + el número reconstruyen exactamente lo
 > que el cliente vio. No hace falta campo nuevo ni nodo de reseteo.
 
-> 🛑 **Bloqueado por el teléfono (2026-08-27).** El Test Request exige un contacto, y
-> `crear_pedido` exige `telefono`: sin él devuelve el error de 2 llaves, que es
-> justamente el schema que NO hay que archivar. **Los contactos de Messenger no traen
-> teléfono.** En la sub-cuenta hay 5 contactos y sólo *Tania Mercado* tiene uno; el de
-> pruebas, *Walfre Aguilar* (`QLPsCRicX5FLw6UL4bTk`), lo tiene vacío — en su propia
-> conversación el bot le pidió el número y contestó *"por aquí"*.
+> ✅ **`telefono` ya no es obligatorio (resuelto 2026-08-27).** Antes lo era, y eso
+> bloqueaba tanto el Test Request como el flujo real: **los contactos de Facebook
+> Messenger no traen teléfono**, y por ahí entra el tráfico. En la sub-cuenta hay 5
+> contactos y sólo *Tania Mercado* tiene uno; el de pruebas, *Walfre Aguilar*
+> (`QLPsCRicX5FLw6UL4bTk`), lo tiene vacío — en su propia conversación el bot le pidió el
+> número y contestó *"por aquí"*.
 >
-> Para desbloquear el nodo basta ponerle un teléfono a ese contacto. Pero el problema de
-> fondo es del flujo, no de la prueba: si el tráfico real entra por Facebook Messenger,
-> la mayoría de los leads llegará sin teléfono y `crear_pedido` los rechazará. Las dos
-> salidas son: (a) que el bot pida el teléfono **antes** de apartar, o (b) que el
-> middleware acepte el id de contacto de GHL como identidad alterna del partner.
+> Ahora la identidad es **`telefono` o `contact_id`**, y por eso el cuerpo manda los dos.
+> El id de GHL se guarda en `res.partner.ref` como `ghl:<id>`, que es campo estándar de
+> Odoo — no hay que crear nada. Cuando vienen ambos se buscan en OR, así que el contacto
+> que hoy no tiene teléfono y mañana sí cae en el **mismo** partner en vez de duplicarse,
+> y ese teléfono nuevo se le escribe al partner en ese momento.
+>
+> ⚠️ Con **ninguno** de los dos sigue siendo error a propósito: un domain vacío en Odoo
+> matchea al primer `res.partner` de la base y le colgaría el pedido a un desconocido.
+> Si `{{contact.id}}` no resolviera en tu versión de GHL, el nodo dejaría de funcionar
+> para los contactos sin teléfono — verifícalo en el Test Request antes de publicar.
 
 **Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
 salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo

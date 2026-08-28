@@ -10,6 +10,7 @@ from lib.odoo import (
     odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
     texto_opciones, terminos_busqueda, domain_ilike_or, domain_borrador_contacto,
     nombre_orden, lineas_carrito, texto_carrito, opciones_visibles, elegir_opcion,
+    domain_partner, ref_ghl,
 )
 
 app = Flask(__name__)
@@ -79,25 +80,45 @@ def crear_pedido():
     try:
         data = request.get_json(force=True, silent=True) or {}
         telefono = (data.get("telefono") or "").strip()
+        contacto = (data.get("contact_id") or "").strip()
         nombre = (data.get("nombre_cliente") or "").strip()
         producto = (data.get("producto_interes") or "").strip()
         sucursal = (data.get("sucursal_asignada") or "").strip()
         opcion = (data.get("opcion") or "").strip()
-        if not telefono or not producto:
-            return err("Faltan 'telefono' y/o 'producto_interes'")
+        if not producto or not (telefono or contacto):
+            return err(
+                "Faltan 'producto_interes' y/o la identidad del cliente "
+                "('telefono' o 'contact_id')"
+            )
 
         uid, models = odoo_connect()
 
-        # 1. Partner por phone o mobile; crear si no existe.
+        # 1. Identidad del cliente. El telefono es lo bueno cuando lo hay, pero los
+        # contactos de Facebook Messenger no traen ninguno — y por ahi entra el
+        # trafico real. Para esos el id de contacto de GHL es la unica identidad
+        # estable: se guarda en res.partner.ref para poder reencontrarlos.
         partners = execute(
-            models, uid, "res.partner", "search",
-            ["|", ["phone", "=", telefono], ["mobile", "=", telefono]],
-            limit=1,
+            models, uid, "res.partner", "search_read",
+            domain_partner(telefono, contacto),
+            fields=["phone", "mobile"], limit=1,
         )
-        partner_id = partners[0] if partners else execute(
-            models, uid, "res.partner", "create",
-            {"name": nombre or telefono, "phone": telefono},
-        )
+        if partners:
+            partner_id = partners[0]["id"]
+            # El partner pudo crearse sin telefono (Messenger). Cuando el cliente
+            # por fin lo da, este es el unico momento en que lo sabemos: si no se
+            # guarda aqui, el equipo se queda sin como llamarle.
+            if telefono and not (partners[0].get("phone") or partners[0].get("mobile")):
+                execute(
+                    models, uid, "res.partner", "write",
+                    [partner_id], {"phone": telefono},
+                )
+        else:
+            vals = {"name": nombre or telefono or contacto}
+            if telefono:
+                vals["phone"] = telefono
+            if contacto:
+                vals["ref"] = ref_ghl(contacto)
+            partner_id = execute(models, uid, "res.partner", "create", vals)
 
         # 2. Resolver CUAL de las opciones quiso el cliente. La consulta es la
         # misma que la de consultar_inventario (mismo domain, mismo orden, mismo
@@ -202,6 +223,15 @@ if __name__ == "__main__":
     _llamadas = []
     _carrito = []       # [(product_id, nombre, cantidad)] del borrador
 
+    # "Tabla" res.partner: uno que ya existe con telefono, como el cliente viejo.
+    _partners = [
+        {"id": 7, "name": "Con Telefono", "phone": "5215500000000", "mobile": "", "ref": ""},
+    ]
+
+    def _match(p, domain):
+        """Evalua el domain de domain_partner: un OR de condiciones de igualdad."""
+        return any(p.get(f, "") == v for f, _, v in (c for c in domain if c != "|"))
+
     def _product_id_de(args):
         """El product_id que el handler mando en el order_line. Leerlo de los
         argumentos reales es lo que prueba que 'la 2' aparto la 2."""
@@ -212,8 +242,18 @@ if __name__ == "__main__":
 
     def _fake_execute(models, uid, model, method, *args, **kwargs):
         _llamadas.append((model, method))
-        if model == "res.partner":
-            return [7]
+        if model == "res.partner" and method == "search_read":
+            return [p for p in _partners if _match(p, args[0])][:1]
+        if model == "res.partner" and method == "create":
+            p = {"id": 7 + len(_partners), "phone": "", "mobile": "", "ref": ""}
+            p.update(args[0])
+            _partners.append(p)
+            return p["id"]
+        if model == "res.partner" and method == "write":
+            for p in _partners:
+                if p["id"] in args[0]:
+                    p.update(args[1])
+            return True
         if model == "product.product":
             return _CATALOGO
         if model == "sale.order" and method == "search":
@@ -235,15 +275,15 @@ if __name__ == "__main__":
     globals()["odoo_connect"] = lambda: (1, None)
     _odoo.execute = _fake_execute
 
-    def _post(opcion=""):
+    def _post(opcion="", **identidad):
+        """Sin identidad explicita manda el telefono de siempre; con ella (p.ej.
+        contact_id=...) manda solo esa, que es el caso de Messenger."""
+        cuerpo = {"producto_interes": "hombre", "opcion": opcion}
+        cuerpo.update(identidad or {"telefono": "5215500000000"})
         return c.post(
             "/api/ghl/crear_pedido",
             headers={"X-API-Secret": "s3cr3t"},
-            json={
-                "telefono": "5215500000000",
-                "producto_interes": "hombre",
-                "opcion": opcion,
-            },
+            json=cuerpo,
         ).get_json()
 
     # 1. Sin opcion: cae a la 1, que es la de mas stock — la misma que el bot
@@ -305,5 +345,41 @@ if __name__ == "__main__":
         "1. CAMISA HOMBRE — $250 (9 disponibles)",
         "2. PLAYERA HOMBRE — $180 (7 disponibles)",
     ], inv
+
+    # --- Identidad del cliente: Messenger no manda telefono ---
+    # Sin telefono Y sin contact_id no hay a quien apartarle nada. Tiene que ser
+    # error, no un pedido colgado del primer partner que encuentre Odoo.
+    sin_id = c.post(
+        "/api/ghl/crear_pedido",
+        headers={"X-API-Secret": "s3cr3t"},
+        json={"producto_interes": "hombre"},
+    ).get_json()
+    assert sin_id["status"] == "error" and sin_id["mensaje"].startswith("Faltan"), sin_id
+
+    # Contacto de Messenger: sin telefono, la identidad es el id de GHL en `ref`.
+    _post(contact_id="CT1", nombre_cliente="Walfre Aguilar")
+    ct1 = [p for p in _partners if p["ref"] == "ghl:CT1"]
+    assert len(ct1) == 1, _partners
+    assert ct1[0]["name"] == "Walfre Aguilar" and not ct1[0]["phone"], ct1
+
+    # El MISMO contacto otra vez no duplica el partner: lo reencuentra por ref.
+    _post(contact_id="CT1")
+    assert len([p for p in _partners if p["ref"] == "ghl:CT1"]) == 1, _partners
+
+    # Y cuando por fin da el telefono cae en el mismo partner (no duplica) y el
+    # telefono queda guardado: es el unico momento en que lo sabemos.
+    _post(contact_id="CT1", telefono="5218112345678")
+    ct1 = [p for p in _partners if p["ref"] == "ghl:CT1"]
+    assert len(ct1) == 1 and ct1[0]["phone"] == "5218112345678", _partners
+
+    # Un contacto DISTINTO si abre partner propio.
+    _post(contact_id="CT2")
+    assert len([p for p in _partners if p["ref"] == "ghl:CT2"]) == 1, _partners
+
+    # Y el telefono sigue siendo identidad valida por si solo: el contacto viejo
+    # cae en el partner 7 de siempre, sin crear uno nuevo.
+    antes = len(_partners)
+    _post()
+    assert len(_partners) == antes, _partners
 
     print("ok")

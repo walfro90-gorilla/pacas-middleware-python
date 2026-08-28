@@ -40,11 +40,16 @@ Si no hay match devuelve `producto_encontrado:false` con todo en cero — no es 
 
 | Entrada | Obligatorio | Notas |
 |---|---|---|
-| `telefono` | sí | Busca `res.partner` por `phone` **o** `mobile`; si no existe lo crea |
+| `telefono` | sí\* | Busca `res.partner` por `phone` **o** `mobile` |
+| `contact_id` | sí\* | Id del contacto de GHL. Identidad alterna para quien no tiene teléfono; se guarda en `res.partner.ref` como `ghl:<id>` |
 | `producto_interes` | sí | El mismo término que se le mandó a `consultar_inventario`. Si no hay match devuelve error |
 | `sucursal_asignada` | no | Igual que arriba. Tiene que ser **la misma** de la consulta: define el campo de stock y con él el orden de las opciones |
 | `opcion` | no | Cuál de las opciones eligió el cliente. Acepta el mensaje tal cual (`"la 2"`), el nombre o un pedazo. Vacío o irreconocible → la **1** |
-| `nombre_cliente` | no | Si va vacío usa el teléfono como nombre |
+| `nombre_cliente` | no | Si va vacío usa el teléfono (o el `contact_id`) como nombre |
+
+\* **Al menos uno.** Mandar los dos es lo mejor: se buscan en OR y el contacto queda
+identificado por ambos. Con ninguno devuelve error, porque un domain vacío en Odoo
+matchea al primer `res.partner` de la base y le colgaría el pedido a un desconocido.
 
 ```json
 {"status":"success","pedido_creado":false,"linea_agregada":true,"numero_orden":"S22458","articulos":2,"carrito_texto":"1. CAMISA HOMBRE\n2. PLAYERA HOMBRE","mensaje":"Producto agregado al pedido"}
@@ -55,6 +60,13 @@ línea (cantidad 1) en vez de abrir otra orden, así que varias pacas caben en u
 pedido. Si ese producto ya estaba, no escribe nada — con eso los disparos repetidos de
 GHL dejan de duplicar. Los **7 campos** de la respuesta salen siempre, iguales en las
 tres ramas: GHL congela el schema de merge tags al crear el nodo.
+
+**Identidad del cliente: teléfono si lo hay, si no el `contact_id` de GHL.** Los
+contactos de Facebook Messenger — por donde entra el tráfico real — no traen teléfono,
+así que el id de GHL es lo único estable y se guarda en `res.partner.ref`. Cuando vienen
+los dos se buscan ambos (OR), de modo que un contacto que hoy no tiene teléfono y mañana
+sí cae en el mismo partner en vez de duplicarse; y ese teléfono nuevo se escribe en el
+partner, que es el único momento en que se conoce.
 
 `opcion` se resuelve contra la misma lista que vio el cliente: los dos endpoints la arman
 con `opciones_visibles()` (con stock primero, máximo 3), así que "la 2" significa lo mismo
@@ -215,6 +227,9 @@ con `status:error`, y el body exacto que manda GHL.
   reconstruyen la lista que vio. Sin campo nuevo en GHL ni nodo de reseteo. Antes
   `crear_pedido` hacía `search(limit=1)` y apartaba un producto arbitrario, posiblemente
   agotado
+- [x] `crear_pedido` acepta contactos sin teléfono (2026-08-27) — los contactos de
+  Facebook Messenger, que es por donde entra el tráfico, no traen ninguno. La identidad
+  ahora es `telefono` **o** `contact_id`, y el id de GHL se guarda en `res.partner.ref`
 - [ ] **Conectar `crear_pedido` en GHL** — el endpoint está listo, falta armar el Custom
   Webhook. Receta completa en
   [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--pendiente-de-conectar). Al crear el

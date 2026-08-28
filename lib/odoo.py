@@ -56,6 +56,33 @@ def domain_borrador_contacto(partner_id):
     return [["partner_id", "=", partner_id], ["state", "=", "draft"]]
 
 
+def ref_ghl(contact_id):
+    """Como se guarda la identidad de GHL en Odoo: el campo `ref` de res.partner
+    (Referencia interna, estandar — no hace falta campo nuevo). El prefijo evita
+    que choque con una referencia escrita a mano por el equipo."""
+    return f"ghl:{contact_id}" if contact_id else ""
+
+
+def domain_partner(telefono, contact_id):
+    """Domain para encontrar al cliente. El telefono es la identidad buena cuando
+    la hay, pero los contactos de Facebook Messenger no traen ninguno — y por ahi
+    entra el trafico real: para esos el id de contacto de GHL es lo unico estable.
+    Cuando vienen los dos se buscan LOS DOS (OR), para que un contacto que hoy no
+    tiene telefono y manana si caiga en el mismo partner en vez de duplicarse."""
+    conds = []
+    if telefono:
+        conds += [["phone", "=", telefono], ["mobile", "=", telefono]]
+    ref = ref_ghl(contact_id)
+    if ref:
+        conds.append(["ref", "=", ref])
+    if not conds:
+        # Sin identidad el domain quedaria vacio, y un domain vacio en Odoo
+        # matchea al PRIMER partner de la base: le colgaria el pedido a un
+        # desconocido. Reventar es lo correcto.
+        raise ValueError("sin 'telefono' ni 'contact_id' no hay a quien buscar")
+    return ["|"] * (len(conds) - 1) + conds
+
+
 def odoo_connect():
     """Autentica en Odoo y devuelve (uid, models). Lanza si falla."""
     if not (ODOO_URL and ODOO_DB and ODOO_USER and ODOO_API_KEY):
@@ -184,6 +211,20 @@ if __name__ == "__main__":
 
     # domain_borrador_contacto: AND implicito, solo el borrador abierto.
     assert domain_borrador_contacto(7) == [["partner_id", "=", 7], ["state", "=", "draft"]]
+
+    # domain_partner: telefono y/o id de GHL (Messenger no manda telefono).
+    assert ref_ghl("abc") == "ghl:abc" and ref_ghl("") == ""
+    assert domain_partner("55", "") == ["|", ["phone", "=", "55"], ["mobile", "=", "55"]]
+    assert domain_partner("", "abc") == [["ref", "=", "ghl:abc"]]
+    assert domain_partner("55", "abc") == [
+        "|", "|", ["phone", "=", "55"], ["mobile", "=", "55"], ["ref", "=", "ghl:abc"],
+    ]
+    # Sin identidad NO puede devolver [] (matchearia al primer partner de la base).
+    try:
+        domain_partner("", "")
+        raise AssertionError("sin identidad domain_partner deberia reventar")
+    except ValueError:
+        pass
 
     # texto_carrito: numera desde 1 y omite "x1" (el caso normal, una paca).
     assert texto_carrito([(1, "CAMISA HOMBRE", 1), (2, "PLAYERA HOMBRE", 3)]) == (
