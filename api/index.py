@@ -78,13 +78,26 @@ def consultar_inventario():
 @app.route("/api/ghl/crear_pedido", methods=["POST"])
 def crear_pedido():
     try:
-        data = request.get_json(force=True, silent=True) or {}
+        # Un merge tag de GHL que traiga comillas o saltos de linea rompe el JSON
+        # del cuerpo, y silent=True lo convierte en None. Sin este guard el handler
+        # veia {} y contestaba "faltan campos", que manda a buscar el problema al
+        # lado equivocado. Decirlo tal cual ahorra horas.
+        data = request.get_json(force=True, silent=True)
+        if data is None:
+            return err(
+                "El cuerpo no es JSON valido. Suele ser un merge tag con comillas "
+                "o saltos de linea inyectado sin escapar (ver GHL_SETUP.md A8)"
+            )
+
         telefono = (data.get("telefono") or "").strip()
         contacto = (data.get("contact_id") or "").strip()
         nombre = (data.get("nombre_cliente") or "").strip()
         producto = (data.get("producto_interes") or "").strip()
         sucursal = (data.get("sucursal_asignada") or "").strip()
-        opcion = (data.get("opcion") or "").strip()
+        # La opcion la manda GHL en el QUERY STRING, no en el cuerpo: es texto libre
+        # del cliente y en el JSON lo rompe (ver arriba). Se sigue aceptando en el
+        # cuerpo para quien llame por curl. Ver ADR 0008.
+        opcion = (data.get("opcion") or request.args.get("opcion") or "").strip()
         if not producto or not (telefono or contacto):
             return err(
                 "Faltan 'producto_interes' y/o la identidad del cliente "
@@ -194,6 +207,8 @@ def crear_pedido():
 
 # ponytail: self-check de la logica ramificada (guard, sin Odoo).
 if __name__ == "__main__":
+    from urllib.parse import quote
+
     from lib import auth as _auth
 
     c = app.test_client()
@@ -381,5 +396,53 @@ if __name__ == "__main__":
     antes = len(_partners)
     _post()
     assert len(_partners) == antes, _partners
+
+    # --- La opcion viaja por el query string, no por el cuerpo ---
+    # Es la via que usa GHL: el mensaje del cliente es texto libre y en el JSON lo
+    # rompe. La lista visible es 1. CAMISA, 2. PLAYERA (la SUDADERA esta agotada).
+    def _post_qs(qs, **identidad):
+        cuerpo = {"producto_interes": "hombre"}
+        cuerpo.update(identidad or {"telefono": "5215500000000"})
+        return c.post(
+            "/api/ghl/crear_pedido" + qs,
+            headers={"X-API-Secret": "s3cr3t"},
+            json=cuerpo,
+        ).get_json()
+
+    _carrito.clear()
+    r = _post_qs("?opcion=la%202")          # url-encodeado, como lo manda GHL
+    assert r["carrito_texto"] == "1. PLAYERA HOMBRE", r
+
+    # Y con el mensaje entero del cliente, comillas y salto de linea incluidos:
+    # esto es exactamente lo que rompia el cuerpo JSON.
+    _carrito.clear()
+    _mensaje = 'si porfa, "la 2"\nque sea esa'
+    r = _post_qs("?opcion=" + quote(_mensaje))
+    assert r["carrito_texto"] == "1. PLAYERA HOMBRE", r
+
+    # El cuerpo sigue funcionando para quien llame por curl.
+    _carrito.clear()
+    r = _post("la 2")
+    assert r["carrito_texto"] == "1. PLAYERA HOMBRE", r
+
+    # Y el cuerpo gana sobre el query string si vienen los dos.
+    _carrito.clear()
+    r = c.post(
+        "/api/ghl/crear_pedido?opcion=2",
+        headers={"X-API-Secret": "s3cr3t"},
+        json={"telefono": "5215500000000", "producto_interes": "hombre", "opcion": "1"},
+    ).get_json()
+    assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
+
+    # --- Cuerpo mal formado: error honesto, no "faltan campos" ---
+    # Es lo que pasa cuando un merge tag de GHL trae comillas sin escapar.
+    _roto = '{"producto_interes": "camisa "grande"", "telefono": "521"}'
+    roto = c.post(
+        "/api/ghl/crear_pedido",
+        headers={"X-API-Secret": "s3cr3t", "Content-Type": "application/json"},
+        data=_roto,
+    ).get_json()
+    assert roto["status"] == "error", roto
+    assert "no es JSON valido" in roto["mensaje"], roto
 
     print("ok")

@@ -13,6 +13,7 @@ Por qué el código es como es. Formato [MADR](https://adr.github.io/madr/) redu
 | [0005](0005-borrador-de-sale-order-es-el-carrito.md) | El `sale.order` en borrador del contacto es el carrito | accepted | 2026-08-26 |
 | [0006](0006-self-checks-con-assert.md) | Self-checks con `assert` en `__main__`, sin framework de tests | accepted | 2026-08-24 |
 | [0007](0007-hook-stop-corre-los-self-checks.md) | Un hook `Stop` corre los self-checks y bloquea el turno si fallan | accepted | 2026-08-28 |
+| [0008](0008-opcion-por-query-string.md) | `opcion` viaja por el query string, no dentro del cuerpo JSON | accepted | 2026-08-28 |
 
 ## Cómo se usan
 

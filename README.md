@@ -45,7 +45,7 @@ Si no hay match devuelve `producto_encontrado:false` con todo en cero — no es 
 | `contact_id` | sí\* | Id del contacto de GHL. Identidad alterna para quien no tiene teléfono; se guarda en `res.partner.ref` como `ghl:<id>` |
 | `producto_interes` | sí | El mismo término que se le mandó a `consultar_inventario`. Si no hay match devuelve error |
 | `sucursal_asignada` | no | Igual que arriba. Tiene que ser **la misma** de la consulta: define el campo de stock y con él el orden de las opciones |
-| `opcion` | no | Cuál de las opciones eligió el cliente. Acepta el mensaje tal cual (`"la 2"`), el nombre o un pedazo. Vacío o irreconocible → la **1** |
+| `opcion` | no | Cuál de las opciones eligió el cliente. Acepta el mensaje tal cual (`"la 2"`), el nombre o un pedazo. Vacío o irreconocible → la **1**. Se lee del **query string** o del cuerpo; el cuerpo gana |
 | `nombre_cliente` | no | Si va vacío usa el teléfono (o el `contact_id`) como nombre |
 
 \* **Al menos uno.** Mandar los dos es lo mejor: se buscan en OR y el contacto queda
@@ -62,7 +62,9 @@ Comportamiento, en corto:
   (cantidad 1) al mismo pedido; si ese producto ya estaba, no escribe nada.
   → [ADR 0005](docs/decisions/0005-borrador-de-sale-order-es-el-carrito.md)
 - **`opcion` se resuelve contra la misma lista que vio el cliente**, porque los dos
-  endpoints la arman con `opciones_visibles()` (con stock primero, máximo 3).
+  endpoints la arman con `opciones_visibles()` (con stock primero, máximo 3). GHL la manda
+  por **query string**, no en el cuerpo — el mensaje del cliente es texto libre y en el
+  JSON lo rompe. → [ADR 0008](docs/decisions/0008-opcion-por-query-string.md)
 - **Identidad: teléfono si lo hay, si no el `contact_id` de GHL**, guardado en
   `res.partner.ref`. → [ADR 0004](docs/decisions/0004-identidad-telefono-o-contact-id.md)
 - **Los 7 campos salen siempre**, iguales en las tres ramas.
@@ -224,9 +226,9 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] **`crear_pedido` conectado en GHL** (2026-08-28) — nodo `#2 Crear pedido Odoo` en la
   rama *Eligio paca*, con los 7 campos archivados. Ver
   [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--conectado)
-- [ ] **Pasar `opcion` al nodo A8** — hoy no va en el cuerpo, así que siempre aparta la
-  opción 1. `{{message.body}}` rompe el JSON; la salida es un parámetro de consulta o que
-  el middleware tolere el cuerpo mal formado
+- [x] **`opcion` resuelta** (2026-08-28) — viaja como parámetro de consulta
+  (`?opcion={{message.body}}`), no en el cuerpo, porque GHL interpola los merge tags sin
+  escapar. Ver [ADR 0008](docs/decisions/0008-opcion-por-query-string.md)
 - [ ] **Verificar `{{contact.id}}` en ejecución real** — el Test Request no resuelve merge
   tags, así que sólo se confirma con una conversación de verdad. Si no resolviera, los
   contactos de Messenger vuelven a fallar
