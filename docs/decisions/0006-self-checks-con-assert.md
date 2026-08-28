@@ -45,3 +45,5 @@ confirmar que el self-check falla.
   más módulos, esto se queda corto y toca migrar a pytest — sería un ADR nuevo que
   supersede a éste.
 - No hay CI que lo corra: hoy depende de que se ejecute antes de commitear.
+  *(2026-08-28: dentro de sesiones de Claude Code esto ya lo cubre un hook `Stop` —
+  ver [0007](0007-hook-stop-corre-los-self-checks.md). Fuera de ellas sigue vigente.)*

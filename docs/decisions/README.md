@@ -12,6 +12,7 @@ Por qué el código es como es. Formato [MADR](https://adr.github.io/madr/) redu
 | [0004](0004-identidad-telefono-o-contact-id.md) | La identidad del cliente es el teléfono **o** el `contact_id` de GHL | accepted | 2026-08-27 |
 | [0005](0005-borrador-de-sale-order-es-el-carrito.md) | El `sale.order` en borrador del contacto es el carrito | accepted | 2026-08-26 |
 | [0006](0006-self-checks-con-assert.md) | Self-checks con `assert` en `__main__`, sin framework de tests | accepted | 2026-08-24 |
+| [0007](0007-hook-stop-corre-los-self-checks.md) | Un hook `Stop` corre los self-checks y bloquea el turno si fallan | accepted | 2026-08-28 |
 
 ## Cómo se usan
 

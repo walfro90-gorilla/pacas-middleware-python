@@ -12,8 +12,12 @@ python lib/odoo.py      # imprime "ok" o revienta
 python api/index.py     # idem, ejercita los handlers con un Odoo falso
 ```
 
-Córrelos **siempre** antes de commitear. Si tocaste lógica, rompe el código a propósito y
-confirma que el self-check falla — una aserción que no muere no prueba nada.
+Un hook `Stop` los corre solo al final de cada turno que haya tocado algún `.py`, y
+**bloquea el turno si fallan** ([0007](docs/decisions/0007-hook-stop-corre-los-self-checks.md)).
+No tienes que acordarte de correrlos; sí de no ignorar el bloqueo.
+
+Si tocaste lógica, rompe el código a propósito y confirma que el self-check falla — una
+aserción que no muere no prueba nada, y el hook tampoco la va a salvar.
 
 ## Entorno
 
@@ -35,6 +39,7 @@ Están en [`docs/decisions/`](docs/decisions/README.md). Léelas antes de cambia
 - Identidad del cliente: teléfono **o** `contact_id` → [0004](docs/decisions/0004-identidad-telefono-o-contact-id.md)
 - El borrador de `sale.order` es el carrito → [0005](docs/decisions/0005-borrador-de-sale-order-es-el-carrito.md)
 - Self-checks con `assert`, sin pytest → [0006](docs/decisions/0006-self-checks-con-assert.md)
+- Un hook `Stop` corre los self-checks y bloquea el turno si fallan → [0007](docs/decisions/0007-hook-stop-corre-los-self-checks.md)
 
 Si vas a contradecir una, escribe un ADR nuevo que la supersede. No edites el viejo.
 
@@ -68,3 +73,4 @@ Si vas a contradecir una, escribe un ADR nuevo que la supersede. No edites el vi
 | `README.md` | Qué es, cómo se corre, contrato de los endpoints |
 | `docs/decisions/` | Por qué el código es como es |
 | `GHL_SETUP.md` | Runbook: la configuración exacta que corre hoy en GHL |
+| `.claude/hooks/` | El hook `Stop` que corre los self-checks |
