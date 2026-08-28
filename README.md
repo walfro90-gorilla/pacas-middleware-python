@@ -219,8 +219,8 @@ con `status:error`, y el body exacto que manda GHL.
   ejecuciones reales del workflow (no solo en el botón "Test" de GHL, como se pensó
   antes). Lógica movida a `lib/`, `api/index.py` sigue siendo el único entrypoint Flask
 - [x] `consultar_inventario` conectado en GHL — ver [GHL_SETUP.md § Parte A](GHL_SETUP.md#parte-a--lo-que-está-armado-en-ghl)
-- [ ] **Conectar el número de WhatsApp** en la sub-cuenta — es lo único que falta para que responda; sin canal provisionado el workflow corre pero el mensaje no sale
-- [ ] Probar end-to-end con un mensaje real y revisar los *Registros de ejecución*
+- [x] Probado end-to-end con un contacto real (2026-08-25) — el canal de los 5 nodos es **FACEBOOK** (Messenger, página "Pacas AA"); WhatsApp sigue sin provisionar en la sub-cuenta y no hace falta para operar
+- [x] Nodo "Responder con stock" limpiado (2026-08-26) — ya muestra las 2-3 opciones que empaqueta `nombre_producto_odoo`; se quitaron los merge tags duplicados de `precio_real` / `stock_disponible`. Ver [GHL_SETUP.md A6](GHL_SETUP.md#a6-responder--acción-conversation-ai)
 - [x] Resuelto de dónde sale el producto exacto (2026-08-26) — `consultar_inventario` y
   `crear_pedido` arman la lista con la **misma** función (`opciones_visibles`), así que
   `{{contact.qu_producto_te_interesa}}` + el número que dijo el cliente (`opcion`)
