@@ -12,3 +12,7 @@ __pycache__/
 venv/
 .venv/
 env/
+
+# Claude Code: worktrees locales y settings personales
+.claude/worktrees/
+.claude/settings.local.json

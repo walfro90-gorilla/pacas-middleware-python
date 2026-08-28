@@ -118,6 +118,10 @@ lista para que el bot la lea de vuelta (*"llevas: 1. … 2. …"*). Las cantidad
 
 ---
 
+> Este documento es el **runbook**: la configuración exacta que corre hoy en GHL. Las
+> decisiones de diseño que hay detrás están en
+> [`docs/decisions/`](docs/decisions/README.md), y no se re-litigan aquí.
+
 ## Parte A — Lo que está armado en GHL
 
 Esto ya no es una propuesta: es el registro de la configuración que corre hoy en la
@@ -198,8 +202,9 @@ Sintaxis resultante de las variables:
 
 ### A5. Acción #2 — If/Else (`Si / si no`)
 
-> 🔴 Los endpoints devuelven **HTTP 200 aunque fallen** (a propósito — con 4xx/5xx GHL
-> suspende el webhook tras varios fallos). **Nunca ramifiques por status HTTP.**
+> 🔴 Los endpoints devuelven **HTTP 200 aunque fallen**, a propósito — con 4xx/5xx GHL
+> suspende el webhook tras varios fallos. **Nunca ramifiques por status HTTP.** El porqué,
+> en [ADR 0001](docs/decisions/0001-errores-de-negocio-en-http-200.md).
 
 Las ramas se evalúan en orden; la última es el `else`:
 
