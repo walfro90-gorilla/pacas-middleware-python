@@ -314,6 +314,27 @@ Es el mensaje del cliente tal cual; el middleware le saca el número (`"la 2"`,
 `"quiero la 2"` → la 2) y también acepta el nombre o un pedazo (`"pantalon"`). Si no
 entiende nada, cae a la **opción 1**, que es la de más stock y la primera que lista el bot.
 
+> 🔴 **`{{message.body}}` NO resuelve aquí — medido el 2026-08-29.** En la primera
+> conversación real por Messenger el middleware recibió `?opcion=` **vacía**:
+>
+> ```
+> 18:34:13  POST /api/ghl/consultar_inventario     200
+> 18:36:28  POST /api/ghl/crear_pedido?opcion=     200   ← vacía
+> ```
+>
+> El workflow lo dispara la acción del bot (A7), y en ese contexto **no existe un objeto
+> `message`**: sólo hay campos de contacto. `{{message.body}}` sólo resuelve cuando el
+> disparador es un mensaje entrante.
+>
+> Desde ese día una `opcion` vacía es **error**, no la opción 1 en silencio
+> ([ADR 0009](docs/decisions/0009-opcion-vacia-es-error.md)): apartar la paca equivocada
+> con un `200 success` encima es peor que no apartar.
+>
+> **Arreglo pendiente del lado GHL:** que el nodo *Pregunta* guarde la respuesta del
+> cliente en un campo de contacto y mandar `opcion={{contact.<ese_campo>}}`. Necesita su
+> nodo de reseteo, igual que `¿Qué Producto Te Interesa?`, porque *Información de
+> Contacto* sólo llena campos vacíos.
+
 > 🔴 **No lo muevas al cuerpo.** El mensaje es texto libre y GHL interpola los merge tags
 > **sin escapar**: un `si porfa, "la 2"` rompe el JSON entero, y entonces *todos* los
 > campos llegan vacíos. Por query string GHL lo url-encodea y viaja seguro. Ver
@@ -347,10 +368,17 @@ entiende nada, cae a la **opción 1**, que es la de más stock y la primera que 
 > ⚠️ Con **ninguno** de los dos sigue siendo error a propósito: un domain vacío en Odoo
 > matchea al primer `res.partner` de la base y le colgaría el pedido a un desconocido.
 >
-> ⚠️ **`{{contact.id}}` no está verificado en ejecución real.** El Test Request no sirve
-> para comprobarlo (ver abajo). Si en producción no resolviera, los contactos de
-> Messenger — que no traen teléfono — volverían a fallar. Se confirma con la primera
-> conversación real: revisar los *Registros de ejecución*.
+> ⚠️ **`{{contact.id}}` sigue sin verificar** aun después de la corrida del 2026-08-29.
+> El Test Request no sirve (ver abajo), y **un `200` en los logs de Vercel tampoco prueba
+> nada**: los errores de negocio también salen en 200 ([ADR 0001](docs/decisions/0001-errores-de-negocio-en-http-200.md)),
+> así que ese `200` puede ser tanto el pedido creado como *"Faltan 'producto_interes' y/o
+> la identidad del cliente"*. Se distingue mirando el **cuerpo** de la respuesta en los
+> *Registros de ejecución* de GHL, o si apareció el borrador en Odoo staging.
+
+> 🔴 **Después del webhook no hay nada que le conteste al cliente** (2026-08-29). El
+> `200` llega, y ahí se acaba el flujo: el bot se queda callado justo cuando el cliente
+> acaba de elegir. Falta un nodo de respuesta que renderice
+> `{{custom_webhook.2.response.carrito_texto}}` (o `mensaje`) después del nodo `#2`.
 
 **Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
 salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo

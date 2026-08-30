@@ -229,9 +229,18 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] **`opcion` resuelta** (2026-08-28) — viaja como parámetro de consulta
   (`?opcion={{message.body}}`), no en el cuerpo, porque GHL interpola los merge tags sin
   escapar. Ver [ADR 0008](docs/decisions/0008-opcion-por-query-string.md)
+- [ ] **Arreglar `opcion` en GHL** — `{{message.body}}` no resuelve en el contexto de ese
+  workflow (medido el 2026-08-29, llegó `?opcion=` vacía). Hay que guardar la respuesta
+  del cliente en un campo de contacto y mandar `opcion={{contact.<campo>}}`, con su nodo
+  de reseteo. Ver [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--conectado) y
+  [ADR 0009](docs/decisions/0009-opcion-vacia-es-error.md)
+- [ ] **Agregar el nodo que responde después de `crear_pedido`** — hoy el flujo termina en
+  el webhook y el bot se queda callado. Debe renderizar
+  `{{custom_webhook.2.response.carrito_texto}}`
 - [ ] **Verificar `{{contact.id}}` en ejecución real** — el Test Request no resuelve merge
-  tags, así que sólo se confirma con una conversación de verdad. Si no resolviera, los
-  contactos de Messenger vuelven a fallar
+  tags, y un `200` en los logs tampoco prueba nada (los errores de negocio también son
+  200). Se confirma con el cuerpo de la respuesta en los *Registros de ejecución* o con el
+  borrador en Odoo
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
 - [x] `crear_pedido` es un carrito (2026-08-26) — el `sale.order` en borrador del contacto

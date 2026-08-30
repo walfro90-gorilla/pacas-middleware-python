@@ -14,6 +14,7 @@ Por qué el código es como es. Formato [MADR](https://adr.github.io/madr/) redu
 | [0006](0006-self-checks-con-assert.md) | Self-checks con `assert` en `__main__`, sin framework de tests | accepted | 2026-08-24 |
 | [0007](0007-hook-stop-corre-los-self-checks.md) | Un hook `Stop` corre los self-checks y bloquea el turno si fallan | accepted | 2026-08-28 |
 | [0008](0008-opcion-por-query-string.md) | `opcion` viaja por el query string, no dentro del cuerpo JSON | accepted | 2026-08-28 |
+| [0009](0009-opcion-vacia-es-error.md) | Una `opcion` vacía es un error, no la opción 1 | accepted | 2026-08-29 |
 
 ## Cómo se usan
 

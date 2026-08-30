@@ -98,10 +98,25 @@ def crear_pedido():
         # del cliente y en el JSON lo rompe (ver arriba). Se sigue aceptando en el
         # cuerpo para quien llame por curl. Ver ADR 0008.
         opcion = (data.get("opcion") or request.args.get("opcion") or "").strip()
-        if not producto or not (telefono or contacto):
+        # Nombrar CUAL falta, no los dos juntos: el 2026-08-29 este mensaje dejo
+        # sin resolver si lo vacio era el producto (el nodo de reseteo de GHL
+        # corriendo antes del webhook) o la identidad (un merge tag que no
+        # resuelve). Son arreglos distintos y GHL no muestra el cuerpo que mando.
+        faltan = []
+        if not producto:
+            faltan.append("'producto_interes'")
+        if not (telefono or contacto):
+            faltan.append("la identidad del cliente ('telefono' o 'contact_id')")
+        if faltan:
+            return err("Faltan " + " y ".join(faltan))
+        # Una opcion VACIA no es un cliente indeciso: es un merge tag que no
+        # resolvio. Cayendo a la 1 en silencio se apartaba la paca equivocada con
+        # un 200 encima, que es justo lo que paso el 2026-08-29. Un texto que no
+        # se entiende SI sigue cayendo a la 1 (ver GHL_SETUP.md A8).
+        if not opcion:
             return err(
-                "Faltan 'producto_interes' y/o la identidad del cliente "
-                "('telefono' o 'contact_id')"
+                "Falta 'opcion'. Llego vacia, que en GHL suele ser un merge tag "
+                "que no resuelve en el contexto de ese workflow (ver A8)"
             )
 
         uid, models = odoo_connect()
@@ -222,6 +237,18 @@ if __name__ == "__main__":
     ok = c.post("/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json={})
     assert ok.status_code == 200 and ok.get_json()["mensaje"].startswith("Faltan")
 
+    # El mensaje nombra SOLO lo que falta: es lo unico que distingue "el nodo de
+    # reseteo vacio el producto" de "el merge tag de identidad no resuelve".
+    def _falta(**cuerpo):
+        return c.post(
+            "/api/ghl/crear_pedido", headers={"X-API-Secret": "s3cr3t"}, json=cuerpo,
+        ).get_json()["mensaje"]
+
+    solo_producto = _falta(producto_interes="", contact_id="CT9")
+    assert "producto_interes" in solo_producto and "identidad" not in solo_producto, solo_producto
+    solo_identidad = _falta(producto_interes="hombre")
+    assert "identidad" in solo_identidad and "producto_interes" not in solo_identidad, solo_identidad
+
     # --- Carrito de crear_pedido, con un Odoo falso ---
     # nombre_orden y lineas_carrito viven en lib.odoo y usan el execute de ESE
     # modulo, asi que hay que parchar los dos bindings (aqui esta importado por valor).
@@ -301,9 +328,9 @@ if __name__ == "__main__":
             json=cuerpo,
         ).get_json()
 
-    # 1. Sin opcion: cae a la 1, que es la de mas stock — la misma que el bot
-    #    lista primero. Antes un search(limit=1) devolvia cualquier cosa.
-    r = _post()
+    # 1. La opcion 1 es la de mas stock — la misma que el bot lista primero.
+    #    Antes un search(limit=1) devolvia cualquier cosa.
+    r = _post("1")
     assert r["pedido_creado"] is True and r["linea_agregada"] is True, r
     assert r["articulos"] == 1 and r["numero_orden"] == "S00042", r
     assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
@@ -336,7 +363,7 @@ if __name__ == "__main__":
 
     # 3. El producto ya estaba: no escribe nada (disparo repetido de GHL).
     _llamadas.clear()
-    r = _post()
+    r = _post("1")
     assert r["pedido_creado"] is False and r["linea_agregada"] is False, r
     assert r["articulos"] == 2, r
     assert ("sale.order", "write") not in _llamadas, _llamadas
@@ -372,29 +399,29 @@ if __name__ == "__main__":
     assert sin_id["status"] == "error" and sin_id["mensaje"].startswith("Faltan"), sin_id
 
     # Contacto de Messenger: sin telefono, la identidad es el id de GHL en `ref`.
-    _post(contact_id="CT1", nombre_cliente="Walfre Aguilar")
+    _post("1", contact_id="CT1", nombre_cliente="Walfre Aguilar")
     ct1 = [p for p in _partners if p["ref"] == "ghl:CT1"]
     assert len(ct1) == 1, _partners
     assert ct1[0]["name"] == "Walfre Aguilar" and not ct1[0]["phone"], ct1
 
     # El MISMO contacto otra vez no duplica el partner: lo reencuentra por ref.
-    _post(contact_id="CT1")
+    _post("1", contact_id="CT1")
     assert len([p for p in _partners if p["ref"] == "ghl:CT1"]) == 1, _partners
 
     # Y cuando por fin da el telefono cae en el mismo partner (no duplica) y el
     # telefono queda guardado: es el unico momento en que lo sabemos.
-    _post(contact_id="CT1", telefono="5218112345678")
+    _post("1", contact_id="CT1", telefono="5218112345678")
     ct1 = [p for p in _partners if p["ref"] == "ghl:CT1"]
     assert len(ct1) == 1 and ct1[0]["phone"] == "5218112345678", _partners
 
     # Un contacto DISTINTO si abre partner propio.
-    _post(contact_id="CT2")
+    _post("1", contact_id="CT2")
     assert len([p for p in _partners if p["ref"] == "ghl:CT2"]) == 1, _partners
 
     # Y el telefono sigue siendo identidad valida por si solo: el contacto viejo
     # cae en el partner 7 de siempre, sin crear uno nuevo.
     antes = len(_partners)
-    _post()
+    _post("1")
     assert len(_partners) == antes, _partners
 
     # --- La opcion viaja por el query string, no por el cuerpo ---
@@ -432,6 +459,18 @@ if __name__ == "__main__":
         headers={"X-API-Secret": "s3cr3t"},
         json={"telefono": "5215500000000", "producto_interes": "hombre", "opcion": "1"},
     ).get_json()
+    assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
+
+    # Una opcion VACIA es error, no la opcion 1 en silencio: significa que el
+    # merge tag de GHL no resolvio. Ni siquiera se conecta a Odoo.
+    _llamadas.clear()
+    vacia = _post_qs("?opcion=")
+    assert vacia["status"] == "error" and "opcion" in vacia["mensaje"], vacia
+    assert not _llamadas, _llamadas
+
+    # Pero un texto que no se entiende SI sigue cayendo a la 1 (ver A8).
+    _carrito.clear()
+    r = _post_qs("?opcion=" + quote("pos esa, la que sea"))
     assert r["carrito_texto"] == "1. CAMISA HOMBRE", r
 
     # --- Cuerpo mal formado: error honesto, no "faltan campos" ---
