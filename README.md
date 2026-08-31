@@ -45,7 +45,7 @@ Si no hay match devuelve `producto_encontrado:false` con todo en cero — no es 
 | `contact_id` | sí\* | Id del contacto de GHL. Identidad alterna para quien no tiene teléfono; se guarda en `res.partner.ref` como `ghl:<id>` |
 | `producto_interes` | sí | El mismo término que se le mandó a `consultar_inventario`. Si no hay match devuelve error |
 | `sucursal_asignada` | no | Igual que arriba. Tiene que ser **la misma** de la consulta: define el campo de stock y con él el orden de las opciones |
-| `opcion` | no | Cuál de las opciones eligió el cliente. Acepta el mensaje tal cual (`"la 2"`), el nombre o un pedazo. Vacío o irreconocible → la **1**. Se lee del **query string** o del cuerpo; el cuerpo gana |
+| `opcion` | sí | Cuál de las opciones eligió el cliente. Acepta el número (`"2"`, `"la 2"`), el nombre o un pedazo. **Vacía es error** ([ADR 0009](docs/decisions/0009-opcion-vacia-es-error.md)); irreconocible → la **1**. Se lee del **query string** o del cuerpo; el cuerpo gana |
 | `nombre_cliente` | no | Si va vacío usa el teléfono (o el `contact_id`) como nombre |
 
 \* **Al menos uno.** Mandar los dos es lo mejor: se buscan en OR y el contacto queda
@@ -65,6 +65,10 @@ Comportamiento, en corto:
   endpoints la arman con `opciones_visibles()` (con stock primero, máximo 3). GHL la manda
   por **query string**, no en el cuerpo — el mensaje del cliente es texto libre y en el
   JSON lo rompe. → [ADR 0008](docs/decisions/0008-opcion-por-query-string.md)
+- **GHL manda el dígito, no el texto del cliente**: cada rama del bot (*Eligio la 1/2/3*)
+  tiene su propia copia del nodo con `?opcion=N` en literal, porque no hay merge tag que
+  traiga la respuesta.
+  → [ADR 0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md)
 - **Identidad: teléfono si lo hay, si no el `contact_id` de GHL**, guardado en
   `res.partner.ref`. → [ADR 0004](docs/decisions/0004-identidad-telefono-o-contact-id.md)
 - **Los 7 campos salen siempre**, iguales en las tres ramas.
@@ -229,18 +233,21 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] **`opcion` resuelta** (2026-08-28) — viaja como parámetro de consulta
   (`?opcion={{message.body}}`), no en el cuerpo, porque GHL interpola los merge tags sin
   escapar. Ver [ADR 0008](docs/decisions/0008-opcion-por-query-string.md)
-- [ ] **Arreglar `opcion` en GHL** — `{{message.body}}` no resuelve en el contexto de ese
-  workflow (medido el 2026-08-29, llegó `?opcion=` vacía). Hay que guardar la respuesta
-  del cliente en un campo de contacto y mandar `opcion={{contact.<campo>}}`, con su nodo
-  de reseteo. Ver [GHL_SETUP.md A8](GHL_SETUP.md#a8-crear-el-pedido--conectado) y
-  [ADR 0009](docs/decisions/0009-opcion-vacia-es-error.md)
-- [ ] **Agregar el nodo que responde después de `crear_pedido`** — hoy el flujo termina en
-  el webhook y el bot se queda callado. Debe renderizar
-  `{{custom_webhook.2.response.carrito_texto}}`
-- [ ] **Verificar `{{contact.id}}` en ejecución real** — el Test Request no resuelve merge
-  tags, y un `200` en los logs tampoco prueba nada (los errores de negocio también son
-  200). Se confirma con el cuerpo de la respuesta en los *Registros de ejecución* o con el
-  borrador en Odoo
+- [x] **`opcion` arreglada en GHL** (2026-08-31) — `{{message.body}}` no resuelve en ese
+  contexto y el nodo del bot no ofrece forma de guardar la respuesta, así que la rama
+  *Eligio paca* se abrió en tres (*Eligio la 1/2/3*), cada una con su copia de `#2`
+  mandando `?opcion=1|2|3` en literal. Ver
+  [ADR 0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md)
+- [x] **`producto_interes` arreglado en GHL** (2026-08-31) — llegaba vacío porque el nodo
+  de reseteo corre antes de que el cliente conteste. Un nodo *Copiar Producto En Proceso*
+  lo guarda en el campo nuevo `Producto En Proceso`, que es el que lee `#2`
+- [x] **Nodo de respuesta después de `crear_pedido`** (2026-08-31) — cada rama tiene su
+  *Confirmar apartado (opcion N)* renderizando el `carrito_texto` de **su** webhook
+- [ ] **Probar end-to-end por Messenger** — es lo único que falta para dar el flujo por
+  bueno. De paso verifica `{{contact.id}}`: el Test Request no resuelve merge tags, y un
+  `200` en los logs tampoco prueba nada (los errores de negocio también son 200). Se
+  confirma con el cuerpo de la respuesta en los *Registros de ejecución* o con el borrador
+  en Odoo
 - [ ] Cambiar la contraseña de Odoo por una API key (*Preferencias > Seguridad de la cuenta > Nueva clave API*)
 - [ ] Apuntar a la instancia Odoo de producción cuando exista — hoy es **staging**
 - [x] `crear_pedido` es un carrito (2026-08-26) — el `sale.order` en borrador del contacto

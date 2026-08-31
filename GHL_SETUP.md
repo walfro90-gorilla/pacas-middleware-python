@@ -142,11 +142,21 @@ Cliente pregunta precio/existencia
 `Configuración > Valores personalizados`, entrada **`api_secret`**, referenciada como
 `{{custom_values.api_secret}}`. Un solo lugar: rotarlo es un cambio, no cinco.
 
-### A2. Campos del contacto — no hizo falta crear ninguno
+### A2. Campos del contacto — uno reusado y uno creado
 
 El bot **ya capturaba** el producto en el campo `¿Qué Producto Te Interesa?`
 (`{{contact.qu_producto_te_interesa}}`), vía su acción *Información de Contacto →
 Producto de Interes*. Se reusa ese.
+
+**`Producto En Proceso`** (`{{contact.producto_en_proceso}}`, carpeta *Additional Info*,
+una sola línea) se creó el 2026-08-31 y es el único campo nuevo del proyecto. Es una copia
+de `¿Qué Producto Te Interesa?` que sobrevive al nodo de reseteo, y es la que lee el
+webhook `#2`. El porqué está en
+[ADR 0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md).
+
+> ⚠️ El **constructor de workflows cachea la lista de campos al cargar la página**. Un
+> campo recién creado en *Configuración > Campos personalizados* no aparece en el picker
+> del nodo hasta recargar el workflow con F5.
 
 `sucursal_asignada` va **fija en `"Jhon"`** dentro del body, porque el agente de esta
 sub-cuenta es Jhon Tovar. Eso también elimina el riesgo de abajo.
@@ -282,9 +292,30 @@ inventario, simplemente ejecútalo y CALLA para que el sistema tome el control."
 
 ### A8. Crear el pedido — conectado
 
-**Armado y probado el 2026-08-28.** Custom Webhook `#2 Crear pedido Odoo`, colgado de la
-rama *Eligio paca* del Conversation AI *Responder con stock*. El Test Request archivó una
-respuesta del camino feliz con los **7 campos** (orden `S22459` en Odoo staging).
+**Armado y probado el 2026-08-28; completado el 2026-08-31.** Custom Webhook
+`#2 Crear pedido Odoo`, colgado de la rama *Eligio paca* del Conversation AI
+*Responder con stock*. El Test Request archivó una respuesta del camino feliz con los
+**7 campos** (orden `S22459` en Odoo staging).
+
+Así queda el workflow *[PACAS TEXAS] Consultar Odoo / Apartar* (publicado):
+
+```
+Contacto Modificado: ¿Qué Producto Te Interesa? cambió
+  └─ #1 Consultar inventario Odoo
+     └─ Copiar Producto En Proceso        ← nuevo 2026-08-31
+        └─ Resetear Producto Interes
+           └─ Evaluar respuesta Odoo (If/Else)
+              ├─ Error Odoo      → Responder error Odoo      → FINAL
+              ├─ No existe       → Responder no existe       → FINAL
+              ├─ Sin stock       → Responder sin stock       → FINAL
+              ├─ Con stock       → Responder con stock
+              │    ├─ No Condition Met → Responder con stock (T8) → FINAL
+              │    ├─ Time Out                                    → FINAL
+              │    ├─ Eligio la 1 → #2 (?opcion=1) → Confirmar apartado (opcion 1)
+              │    ├─ Eligio la 2 → #3 (?opcion=2) → Confirmar apartado (opcion 2)
+              │    └─ Eligio la 3 → #4 (?opcion=3) → Confirmar apartado (opcion 3)
+              └─ No concluyente  → Responder no concluyente  → FINAL
+```
 
 **URL:** `https://pacas-middleware-python.vercel.app/api/ghl/crear_pedido`
 
@@ -297,22 +328,21 @@ respuesta del camino feliz con los **7 campos** (orden `S22459` en Odoo staging)
 | **Tipo de contenido** | `application/json` |
 
 ```json
-{"telefono": "{{contact.phone}}", "contact_id": "{{contact.id}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.qu_producto_te_interesa}}", "sucursal_asignada": "Jhon"}
+{"telefono": "{{contact.phone}}", "contact_id": "{{contact.id}}", "nombre_cliente": "{{contact.name}}", "producto_interes": "{{contact.producto_en_proceso}}", "sucursal_asignada": "Jhon"}
 ```
 
 `sucursal_asignada` va **fija en `"Jhon"`**, igual que en A3 — tiene que ser la misma de
 la consulta: define el campo de existencia y con el el orden de las opciones. Si aqui
 mandas otra, el numero que eligio el cliente apunta a otra lista.
 
-**`opcion` va en PARÁMETROS DE CONSULTA, nunca en el cuerpo** (resuelto 2026-08-28):
+**`opcion` va en PARÁMETROS DE CONSULTA, nunca en el cuerpo** (resuelto 2026-08-28), y
+desde el 2026-08-31 su valor es un **literal distinto en cada copia del nodo**:
 
-| Clave | Valor |
-|---|---|
-| `opcion` | `{{message.body}}` |
-
-Es el mensaje del cliente tal cual; el middleware le saca el número (`"la 2"`,
-`"quiero la 2"` → la 2) y también acepta el nombre o un pedazo (`"pantalon"`). Si no
-entiende nada, cae a la **opción 1**, que es la de más stock y la primera que lista el bot.
+| Nodo | Cuelga de la rama | `opcion` |
+|---|---|---|
+| `#2 Crear pedido Odoo (opcion 1)` | *Eligio la 1* | `1` |
+| `#3 Crear pedido Odoo (opcion 2)` | *Eligio la 2* | `2` |
+| `#4 Crear pedido Odoo (opcion 3)` | *Eligio la 3* | `3` |
 
 > 🔴 **`{{message.body}}` NO resuelve aquí — medido el 2026-08-29.** En la primera
 > conversación real por Messenger el middleware recibió `?opcion=` **vacía**:
@@ -329,11 +359,28 @@ entiende nada, cae a la **opción 1**, que es la de más stock y la primera que 
 > Desde ese día una `opcion` vacía es **error**, no la opción 1 en silencio
 > ([ADR 0009](docs/decisions/0009-opcion-vacia-es-error.md)): apartar la paca equivocada
 > con un `200 success` encima es peor que no apartar.
+
+> ✅ **Resuelto el 2026-08-31 abriendo la rama en tres.** El nodo *Responder con stock* no
+> ofrece **ninguna** forma de guardar la respuesta del cliente en un campo — lo único que
+> expone de ese mensaje son sus **ramas**, que sí lo evalúan. Así que la rama *Eligio paca*
+> se partió en *Eligio la 1* / *Eligio la 2* / *Eligio la 3*, cada una con su copia de `#2`
+> mandando el dígito en literal. Son 3 porque `opciones_visibles()` muestra máximo 3. Ver
+> [ADR 0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md).
 >
-> **Arreglo pendiente del lado GHL:** que el nodo *Pregunta* guarde la respuesta del
-> cliente en un campo de contacto y mandar `opcion={{contact.<ese_campo>}}`. Necesita su
-> nodo de reseteo, igual que `¿Qué Producto Te Interesa?`, porque *Información de
-> Contacto* sólo llena campos vacíos.
+> Condiciones de las ramas, tal cual están:
+>
+> - *Eligio la 1* — «El cliente elige la PRIMERA opcion de la lista que le ofreci: dice 1,
+>   la 1, la primera, esa, la de arriba, o el nombre del primer producto.»
+> - *Eligio la 2* — «…la SEGUNDA…: dice 2, la 2, la segunda, o el nombre del segundo
+>   producto.»
+> - *Eligio la 3* — «…la TERCERA…: dice 3, la 3, la tercera, la ultima, o el nombre del
+>   tercer producto.»
+>
+> Lo ambiguo (*"pos esa"*) cae en *No Condition Met*, que ya re-pregunta con
+> *Responder con stock (T8)*.
+
+> ⚠️ **Las tres copias hay que mantenerlas a la par.** Cambiar la URL, el header o el
+> cuerpo es cambiarlo tres veces: las ramas de GHL no se vuelven a juntar nunca.
 
 > 🔴 **No lo muevas al cuerpo.** El mensaje es texto libre y GHL interpola los merge tags
 > **sin escapar**: un `si porfa, "la 2"` rompe el JSON entero, y entonces *todos* los
@@ -345,12 +392,26 @@ entiende nada, cae a la **opción 1**, que es la de más stock y la primera que 
 > el endpoint al menos lo dice: *"El cuerpo no es JSON valido…"* en vez de *"faltan
 > campos"*.
 
-> ✅ **`producto_interes` sí puede ser `{{contact.qu_producto_te_interesa}}`** (resuelto
-> 2026-08-26). Antes no: `crear_pedido` hacía su propia búsqueda con `limit=1` y apartaba
-> un producto arbitrario, que ni siquiera tenía por qué tener stock. Ahora los dos
-> endpoints arman la lista con la **misma** función (`opciones_visibles`: con stock
-> primero, máximo 3), así que el término grueso + el número reconstruyen exactamente lo
-> que el cliente vio. No hace falta campo nuevo ni nodo de reseteo.
+> 🔴 **`{{contact.qu_producto_te_interesa}}` llegaba VACÍO — medido el 2026-08-29.** El
+> nodo *Resetear Producto Interes* corre justo después de `#1` (12:34:15), dos minutos
+> antes de que el cliente conteste (12:36:28). Cuando `#2` lee el campo, ya está borrado, y
+> el endpoint contesta *"Faltan 'producto_interes'…"* con un `200` encima. **No escribió
+> nada en Odoo**: el guard corre antes de conectarse.
+>
+> El reseteo no se puede quitar: el disparador es *ese campo cambió*, y la acción
+> *Información de Contacto* sólo llena campos vacíos. Sin reseteo, la segunda consulta del
+> mismo cliente no dispara nada.
+
+> ✅ **Resuelto el 2026-08-31 con un campo copia.** Un nodo *Copiar Producto En Proceso*
+> (acción *Actualizar el campo de contacto*) va **entre `#1` y el reseteo** y escribe
+> `Producto En Proceso` = `{{contact.qu_producto_te_interesa}}`. El cuerpo de `#2` lee
+> `{{contact.producto_en_proceso}}`. Esa acción sobreescribe, así que la copia no necesita
+> su propio reseteo. Ver
+> [ADR 0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md).
+>
+> El término grueso sigue sirviendo porque los dos endpoints arman la lista con la **misma**
+> función (`opciones_visibles`: con stock primero, máximo 3), así que el término + el número
+> reconstruyen exactamente lo que el cliente vio (eso es de 2026-08-26).
 
 > ✅ **`telefono` ya no es obligatorio (resuelto 2026-08-27).** Antes lo era, y eso
 > bloqueaba tanto el Test Request como el flujo real: **los contactos de Facebook
@@ -375,13 +436,22 @@ entiende nada, cae a la **opción 1**, que es la de más stock y la primera que 
 > la identidad del cliente"*. Se distingue mirando el **cuerpo** de la respuesta en los
 > *Registros de ejecución* de GHL, o si apareció el borrador en Odoo staging.
 
-> 🔴 **Después del webhook no hay nada que le conteste al cliente** (2026-08-29). El
-> `200` llega, y ahí se acaba el flujo: el bot se queda callado justo cuando el cliente
-> acaba de elegir. Falta un nodo de respuesta que renderice
-> `{{custom_webhook.2.response.carrito_texto}}` (o `mensaje`) después del nodo `#2`.
+> ✅ **Después del webhook ya contesta** (2026-08-31). Antes el `200` llegaba y ahí se
+> acababa el flujo: el bot se quedaba callado justo cuando el cliente acababa de elegir.
+> Cada rama tiene ahora su *Confirmar apartado (opcion N)* — un Conversation AI Bot, canal
+> `FACEBOOK`, igual que los demás nodos de respuesta:
+>
+> ```
+> Listo, ya te aparte esa paca. Tu pedido va asi: {{custom_webhook.#N ….Response.Carrito Texto}} Te apartamos algo mas?
+> ```
+>
+> 🔴 **Al copiar el subárbol, el merge tag sigue apuntando al webhook ORIGINAL** y GHL lo
+> pinta en **rojo**. Hay que borrar el chip y reinsertarlo con el selector de etiquetas
+> estando dentro del nodo de esa rama; entonces sale en azul con el `#N` correcto. Ese
+> color es la única señal: *Guardar acción* acepta el rojo sin quejarse.
 
-**Dónde va el nodo:** después del Conversation AI de la rama *Con stock* (A6), en la
-salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo
+**Dónde van los nodos:** después del Conversation AI de la rama *Con stock* (A6), uno en
+cada salida donde el cliente acepta. Cada "quiero la 2" es una llamada; el borrador de Odoo
 acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
 
 > ⚠️ Esto **escribe en Odoo**: crea el contacto (si el teléfono no existe) y crea o

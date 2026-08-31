@@ -42,6 +42,7 @@ Están en [`docs/decisions/`](docs/decisions/README.md). Léelas antes de cambia
 - Un hook `Stop` corre los self-checks y bloquea el turno si fallan → [0007](docs/decisions/0007-hook-stop-corre-los-self-checks.md)
 - `opcion` va en el query string, no en el cuerpo JSON → [0008](docs/decisions/0008-opcion-por-query-string.md)
 - Una `opcion` vacia es error, no la opcion 1 → [0009](docs/decisions/0009-opcion-vacia-es-error.md)
+- El producto y la `opcion` que lee `crear_pedido` se materializan antes en GHL → [0010](docs/decisions/0010-lo-que-necesita-crear-pedido-se-materializa-antes.md)
 
 Si vas a contradecir una, escribe un ADR nuevo que la supersede. No edites el viejo.
 
