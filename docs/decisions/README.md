@@ -16,6 +16,7 @@ Por qué el código es como es. Formato [MADR](https://adr.github.io/madr/) redu
 | [0008](0008-opcion-por-query-string.md) | `opcion` viaja por el query string, no dentro del cuerpo JSON | accepted | 2026-08-28 |
 | [0009](0009-opcion-vacia-es-error.md) | Una `opcion` vacía es un error, no la opción 1 | accepted | 2026-08-29 |
 | [0010](0010-lo-que-necesita-crear-pedido-se-materializa-antes.md) | Lo que `crear_pedido` necesita se materializa antes, no se lee del contexto | accepted | 2026-08-31 |
+| [0011](0011-la-busqueda-parte-la-frase.md) | La búsqueda parte la frase en palabras: AND primero, OR de reserva | accepted | 2026-08-31 |
 
 ## Cómo se usan
 

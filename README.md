@@ -28,7 +28,7 @@ sabe mapear respuestas planas) y exigen el header `X-API-Secret`.
 
 | Entrada | Obligatorio | Notas |
 |---|---|---|
-| `producto_interes` | sí | Búsqueda `ilike` sobre `product.product.name`. Devuelve hasta 3 opciones **con stock**, la de más stock primero; `nombre_producto_odoo` lleva esa lista ya numerada |
+| `producto_interes` | sí | Se parte en palabras (se cae el ruido: `pacas`, `de`, `ropa`) y se buscan **todas** con `ilike` sobre `product.product.name`; si eso no trae nada, se reintenta con OR. Devuelve hasta 3 opciones **con stock**, la de más stock primero; `nombre_producto_odoo` lleva esa lista ya numerada. → [ADR 0011](docs/decisions/0011-la-busqueda-parte-la-frase.md) |
 | `sucursal_asignada` | no | `Jhon` o `Eli`. Cualquier otro valor cae a GARZA sin avisar |
 
 ```json
@@ -243,6 +243,20 @@ con `status:error`, y el body exacto que manda GHL.
   lo guarda en el campo nuevo `Producto En Proceso`, que es el que lee `#2`
 - [x] **Nodo de respuesta después de `crear_pedido`** (2026-08-31) — cada rama tiene su
   *Confirmar apartado (opcion N)* renderizando el `carrito_texto` de **su** webhook
+- [x] **La búsqueda entiende frases** (2026-08-31) — `pacas de mujer` no matcheaba nada
+  porque se buscaba literal; ahora se parte en palabras (AND, con reintento OR) y los dos
+  endpoints comparten `buscar_productos()`. Ver
+  [ADR 0011](docs/decisions/0011-la-busqueda-parte-la-frase.md)
+- [x] **Ejemplos de salida del agente corregidos** (2026-08-31) — enseñaban a escribir
+  frases y temporadas (`Ropa de invierno para niños`); ahora son términos gruesos. Ver
+  [GHL_SETUP.md A2](GHL_SETUP.md#a2-campos-del-contacto--uno-reusado-y-uno-creado)
+- [ ] **Terminar la salida de la rama *No existe*** — falta el nodo *Reactivar bot*
+  (eliminar etiqueta `stop bot`) en las **dos** salidas de `Responder no existe`; el de
+  *No Condition Met* quedó a medio guardar. Sin él el cliente queda mudo aunque la rama ya
+  termine en 2 turnos. Ver [GHL_SETUP.md A8b](GHL_SETUP.md#a8b-la-rama-no-existe--resuelto-a-medias-el-2026-08-31)
+- [ ] **Dar el mismo trato a las otras tres ramas** (`sin stock`, `error Odoo`,
+  `no concluyente`): siguen con límite de 20 respuestas y con el merge tag que el nodo de
+  reseteo ya vació
 - [ ] **Probar end-to-end por Messenger** — es lo único que falta para dar el flujo por
   bueno. De paso verifica `{{contact.id}}`: el Test Request no resuelve merge tags, y un
   `200` en los logs tampoco prueba nada (los errores de negocio también son 200). Se

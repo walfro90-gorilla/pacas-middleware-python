@@ -170,6 +170,21 @@ sub-cuenta es Jhon Tovar. Eso también elimina el riesgo de abajo.
 > pregunta luego por otro producto, el webhook consulta el primero. Es limitación de
 > GHL. Si estorba, hay que limpiar el campo antes de consultar.
 
+> 🔴 **Lo que el agente escribe en ese campo lo deciden sus *Ejemplos de Salida***, en
+> *Agentes de IA > Conversation AI > Agente IA de ventas Jhon Tovar > Acciones >
+> Producto de Interes*. Hasta el 2026-08-31 decían `Paca mixta premium`,
+> `Paca de dama para calor`, **`Ropa de invierno para niños`** y `Paca regular de
+> caballero` — frases, y una de ellas una temporada que Odoo no tiene. El agente hizo
+> exactamente lo que le enseñaron y mandó `pacas de invierno` a `consultar_inventario`.
+>
+> Hoy son `dama`, `caballero`, `nino`, `camisa caballero`, y la instrucción del campo
+> prohíbe explícitamente temporada, marca, calidad, talla y presupuesto. **Si vuelve a
+> fallar la búsqueda, míralos antes que al código.**
+>
+> El middleware ya no depende de eso — `buscar_productos()` parte la frase
+> ([ADR 0011](docs/decisions/0011-la-busqueda-parte-la-frase.md)) — pero cuanto más
+> limpio llegue el término, mejor sale la lista.
+
 ### A3. Acción #1 — Custom Webhook
 
 | Campo | Valor |
@@ -492,6 +507,43 @@ acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
 Para responderle al cliente, `carrito_texto` trae el pedido completo numerado — sirve
 para el *"llevas: 1. … 2. … ¿algo más?"* sin tener que armar la lista en el prompt.
 
+### A8b. La rama *No existe* — resuelto a medias el 2026-08-31
+
+**Qué pasó (Jimmy Aguilar, 4:36–4:52 PM):** `#1` contestó `producto_encontrado: false`
+para `pacas de invierno`, el flujo se fue a *No existe*, y ahí el bot dio **8 vueltas
+haciendo preguntas aclaratorias** sin poder mandar nunca la lista. El nodo tenía:
+
+| Campo | Antes | Ahora |
+|---|---|---|
+| Límite de respuestas del bot | **20** | **2** |
+| Tiempo de espera | 1 hora | 1 hora |
+| Ramas | *No Condition Met* / *Time Out* → FINAL | igual |
+| Merge tag del mensaje | `{{contact.qu_producto_te_interesa}}` | `{{contact.producto_en_proceso}}` |
+
+> 🔴 **El merge tag viejo estaba roto y nadie lo vio.** El nodo de reseteo vacía
+> `¿Qué Producto Te Interesa?` **un segundo antes** de que corra la rama. Que el mensaje
+> saliera bien fue suerte. `Producto En Proceso` existe justo para esto (A2).
+>
+> Las otras tres ramas (*sin stock*, *error Odoo*, *no concluyente*) **siguen con el
+> merge tag viejo y el límite alto**. Mismo problema esperando.
+
+> 🔴 **No se puede volver a consultar Odoo desde dentro de la rama.** En
+> *Configuración > Contacto*, «Permitir reentrada» está activo **pero**: *"si el Contacto
+> intenta volver a entrar mientras aún está inscrito en este flujo de trabajo, se
+> omitirá"*. Escribir el campo desde un nodo no re-dispara nada mientras el contacto siga
+> dentro. La recuperación tiene que ser **salir** del workflow y dejar que el agente
+> retome.
+
+**Por eso el agente se calla:** tiene tres acciones *Detener bot* — *Goodbye Detection*,
+*Al acordar enviar una cotización* y *Cuando Humano responda mensaje*. Cuando entrega el
+control al workflow se pone la etiqueta **`stop bot`** y ya no vuelve a escribir
+`¿Qué Producto Te Interesa?`, así que el workflow no puede re-dispararse nunca.
+
+> ⏳ **Pendiente:** un nodo *Eliminar etiqueta de contacto → `stop bot`* (nombre
+> *Reactivar bot*) en **las dos** salidas de `Responder no existe`. Sin él el cliente
+> queda mudo aunque la rama ya termine rápido. El de *No Condition Met* quedó a medio
+> guardar el 2026-08-31; hay que verificarlo y hacer el de *Time Out*.
+
 ### A9. Trampas de la UI de GHL
 
 Costaron horas; anotadas para el próximo:
@@ -504,6 +556,14 @@ Costaron horas; anotadas para el próximo:
   `stock_disponible` no devuelve nada; hay que navegar
   `Custom Webhook > #1 … > Response`.
 - El builder congela el renderer seguido. Guardar acción por acción, no todo al final.
+- **`Ctrl+A` con el foco fuera de un `<input>` selecciona TODOS los nodos del canvas**, y
+  el `Delete` siguiente abre *"¿eliminar N nodos?"*. Para vaciar un campo usa `End` +
+  `Shift+Home`, nunca `Ctrl+A`.
+- **Al copiar un subárbol, los merge tags siguen apuntando al nodo ORIGINAL** y GHL los
+  pinta en **rojo**. *Guardar acción* acepta el rojo sin quejarse. Hay que borrar el chip
+  y reinsertarlo desde el nodo de la rama nueva.
+- **El constructor cachea la lista de campos personalizados al cargar la página.** Un
+  campo recién creado no aparece en el picker hasta recargar con F5.
 - **Los deep links al builder cargan en blanco.** Abrir
   `/automation/workflow/<id>` directo (o recargar esa URL) deja la página vacía: el SPA
   sólo monta el builder si llegas navegando desde la *Lista de flujos de trabajo*. Nota

@@ -7,8 +7,8 @@ from flask import Flask, request, jsonify
 
 from lib.auth import require_secret, err
 from lib.odoo import (
-    odoo_connect, execute, BRANCH_STOCK_FIELD, MAX_OPCIONES, formatear_opciones,
-    texto_opciones, terminos_busqueda, domain_ilike_or, domain_borrador_contacto,
+    odoo_connect, execute, BRANCH_STOCK_FIELD, formatear_opciones,
+    texto_opciones, buscar_productos, domain_borrador_contacto,
     nombre_orden, lineas_carrito, texto_carrito, opciones_visibles, elegir_opcion,
     domain_partner, ref_ghl,
 )
@@ -28,14 +28,7 @@ def consultar_inventario():
 
         uid, models = odoo_connect()
         stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
-        domain = domain_ilike_or("name", terminos_busqueda(producto))
-        rows = execute(
-            models, uid, "product.product", "search_read",
-            domain,
-            fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
-            limit=MAX_OPCIONES,
-            order=f"{stock_field} desc",
-        )
+        rows = buscar_productos(models, uid, producto, stock_field)
 
         if not rows:
             return jsonify({
@@ -155,13 +148,7 @@ def crear_pedido():
         # lados. Un search(limit=1) suelto agarraba un producto arbitrario, que
         # ni siquiera tenia por que tener stock.
         stock_field = BRANCH_STOCK_FIELD.get(sucursal, "x_existencia_garza")
-        rows = execute(
-            models, uid, "product.product", "search_read",
-            domain_ilike_or("name", terminos_busqueda(producto)),
-            fields=["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"],
-            limit=MAX_OPCIONES,
-            order=f"{stock_field} desc",
-        )
+        rows = buscar_productos(models, uid, producto, stock_field)
         if not rows:
             return err(f"Producto no encontrado en Odoo: {producto}")
         visibles = opciones_visibles(rows, stock_field)
@@ -260,6 +247,7 @@ if __name__ == "__main__":
         {"id": 42, "name": "CAMISA HOMBRE", "x_precio_real": 250, "x_existencia_garza": 9},
         {"id": 43, "name": "PLAYERA HOMBRE", "x_precio_real": 180, "x_existencia_garza": 7},
         {"id": 44, "name": "SUDADERA HOMBRE", "x_precio_real": 300, "x_existencia_garza": 0},
+        {"id": 45, "name": "BLUSA DAMA", "x_precio_real": 200, "x_existencia_garza": 12},
     ]
     _NOMBRES = {p["id"]: p["name"] for p in _CATALOGO}
     _llamadas = []
@@ -282,6 +270,27 @@ if __name__ == "__main__":
                 return a["order_line"][0][2]["product_id"]
         raise AssertionError(f"sin order_line en {args}")
 
+    def _matchea(nombre, domain):
+        """Evalua el domain en notacion polaca — solo '|' y hojas ilike, que es
+        todo lo que arma domain_ilike. Sin esto el fake devolvia el catalogo
+        entero pasara lo que pasara, y el self-check no probaba NADA de la
+        busqueda: por eso "pacas de mujer" pudo llegar a produccion sin match."""
+        pos = 0
+
+        def expr():
+            nonlocal pos
+            tok = domain[pos]
+            pos += 1
+            if tok == "|":
+                a, b = expr(), expr()
+                return a or b
+            return tok[2].lower() in nombre.lower()
+
+        partes = []
+        while pos < len(domain):
+            partes.append(expr())
+        return all(partes)
+
     def _fake_execute(models, uid, model, method, *args, **kwargs):
         _llamadas.append((model, method))
         if model == "res.partner" and method == "search_read":
@@ -297,7 +306,7 @@ if __name__ == "__main__":
                     p.update(args[1])
             return True
         if model == "product.product":
-            return _CATALOGO
+            return [p for p in _CATALOGO if _matchea(p["name"], args[0])]
         if model == "sale.order" and method == "search":
             return [99] if _carrito else []
         if model == "sale.order" and method in ("create", "write"):
@@ -387,6 +396,58 @@ if __name__ == "__main__":
         "1. CAMISA HOMBRE — $250 (9 disponibles)",
         "2. PLAYERA HOMBRE — $180 (7 disponibles)",
     ], inv
+
+    # --- Busqueda: el agente de GHL escribe FRASES, no terminos gruesos ---
+    # El 2026-08-31 "pacas de invierno" mando a un cliente real a la rama "No
+    # existe" con el catalogo lleno; la frase se buscaba literal.
+    def _inv(producto):
+        return c.post(
+            "/api/ghl/consultar_inventario",
+            headers={"X-API-Secret": "s3cr3t"},
+            json={"producto_interes": producto},
+        ).get_json()
+
+    # 1. La frase se parte y "mujeres" llega a "dama" por sinonimo + singular.
+    r = _inv("pacas de mujeres")
+    assert r["producto_encontrado"] is True, r
+    assert "BLUSA DAMA" in r["nombre_producto_odoo"], r
+
+    # 2. AND, no OR: "camisa de hombre" trae LA camisa, no toda la ropa de
+    #    hombre. Con OR salian tambien PLAYERA y SUDADERA, y la 1 podia ser la
+    #    prenda equivocada.
+    r = _inv("camisa de hombre")
+    assert len(r["opciones"]) == 1, r
+    assert "CAMISA HOMBRE" in r["nombre_producto_odoo"], r
+
+    # 3. Si el AND no trae nada por una palabra que sobra, reintenta con OR en
+    #    vez de contestar "no existe".
+    r = _inv("camisa de hombre premium")
+    assert r["producto_encontrado"] is True, r
+    assert "PLAYERA HOMBRE" in r["nombre_producto_odoo"], r
+
+    # 4. Lo que de verdad no esta sigue siendo "no existe": una sola palabra
+    #    util, sin reintento que la salve.
+    assert _inv("pacas de invierno")["producto_encontrado"] is False
+
+    # 5. Una frase de puro ruido NO puede producir un domain vacio: en Odoo un
+    #    domain sin condiciones matchea el primer producto de la tabla.
+    from lib.odoo import domain_ilike, terminos_busqueda as _tb
+
+    assert domain_ilike("name", _tb("pacas de ropa")) != [], _tb("pacas de ropa")
+    assert _inv("pacas de ropa")["producto_encontrado"] is False
+
+    # 6. La notacion polaca del AND de ORs, que es donde se cuelan los bugs:
+    #    (caballero|hombre) Y camisa.
+    assert domain_ilike("name", [["caballero", "hombre"], ["camisa"]]) == [
+        "|", ["name", "ilike", "caballero"], ["name", "ilike", "hombre"],
+        ["name", "ilike", "camisa"],
+    ]
+
+    # 7. Los dos endpoints buscan con la MISMA funcion: "la 1" de crear_pedido
+    #    es la 1 que listo consultar_inventario.
+    _carrito.clear()
+    r = _post("1", producto_interes="pacas de mujeres", telefono="5215500000000")
+    assert r["carrito_texto"] == "1. BLUSA DAMA", r
 
     # --- Identidad del cliente: Messenger no manda telefono ---
     # Sin telefono Y sin contact_id no hay a quien apartarle nada. Tiene que ser

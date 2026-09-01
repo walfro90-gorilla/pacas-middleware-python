@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 import xmlrpc.client
 
 # --- Config: TODO por env vars en Vercel (nada de secretos en el codigo) ---
@@ -31,16 +32,75 @@ GRUPOS_SINONIMOS = [
     {"mujer", "dama"},
 ]
 
+# Palabras que el cliente y el agente de GHL meten siempre y que Odoo no tiene
+# en el nombre del producto. Sin filtrarlas, "pacas de mujer" se buscaba tal
+# cual y no matcheaba NADA — el 2026-08-31 mando a un cliente real a la rama
+# "No existe" con el catalogo lleno de ropa de dama.
+RUIDO = {
+    "pacas", "paca", "ropa", "prenda", "prendas", "bulto", "bultos",
+    "quiero", "busco", "necesito", "tienes", "tienen", "hay", "info",
+    "informacion", "precio", "precios", "calidad", "todo", "algo",
+}
+
+
+def _sin_acentos(palabra):
+    return "".join(
+        c for c in unicodedata.normalize("NFD", palabra)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _variantes(palabra):
+    """La palabra y su singular probable. Odoo busca con ilike (substring), asi
+    que el singular tambien encuentra el plural del catalogo: "camisa" matchea
+    "CAMISAS". Al reves no — "camisas" no esta dentro de "CAMISA HOMBRE" — y el
+    cliente escribe en plural. Un stem que no exista simplemente no matchea."""
+    v = [palabra]
+    if len(palabra) > 4 and palabra.endswith("es"):
+        v.append(palabra[:-2])
+    elif len(palabra) > 3 and palabra.endswith("s"):
+        v.append(palabra[:-1])
+    return v
+
 
 def terminos_busqueda(producto):
-    """Expande producto_interes con sinonimos conocidos si es exactamente una
-    palabra de un grupo (ej. "caballero" -> tambien busca "hombre"). Frases mas
-    largas se buscan tal cual, sin expandir."""
-    clave = producto.strip().lower()
-    for grupo in GRUPOS_SINONIMOS:
-        if clave in grupo:
-            return sorted(grupo)
-    return [producto]
+    """Los grupos de terminos con los que se busca: uno por palabra util, cada
+    grupo con sus variantes y sinonimos. El producto tiene que matchear un
+    termino de CADA grupo.
+
+        "camisa de caballero"  -> [["camisa"], ["caballero", "hombre"]]
+        "pacas de mujeres"     -> [["dama", "mujer", "mujeres"]]
+
+    Se descartan las palabras de RUIDO y las de menos de 3 letras: un `ilike`
+    de una o dos letras matchea medio catalogo, y un "de" suelto lo matchea
+    todo.
+
+    Si no queda ninguna palabra util devuelve la frase tal cual. Nunca una
+    lista vacia: un domain sin condiciones matchea el PRIMER producto de la
+    tabla, que es peor que no encontrar nada."""
+    grupos = []
+    # \w es unicode en py3: no parte "camisón" ni "niña".
+    for palabra in re.split(r"\W+", producto.strip().lower()):
+        if len(palabra) < 3 or _sin_acentos(palabra) in RUIDO:
+            continue
+        terminos = set()
+        for v in _variantes(palabra):
+            terminos.add(v)
+            for grupo in GRUPOS_SINONIMOS:
+                if v in grupo:
+                    terminos |= grupo
+        grupos.append(sorted(terminos))
+    return grupos or [[producto]]
+
+
+def domain_ilike(campo, grupos):
+    """Domain de Odoo: el campo matchea un termino de CADA grupo (AND de ORs).
+    Notacion polaca: N terminos OR necesitan N-1 '|' antes; los AND van
+    implicitos al concatenar, asi que basta con armar cada OR y pegarlos."""
+    domain = []
+    for grupo in grupos:
+        domain += ["|"] * (len(grupo) - 1) + [[campo, "ilike", t] for t in grupo]
+    return domain
 
 
 def domain_ilike_or(campo, terminos):
@@ -97,6 +157,36 @@ def odoo_connect():
 
 def execute(models, uid, model, method, *args, **kwargs):
     return models.execute_kw(ODOO_DB, uid, ODOO_API_KEY, model, method, list(args), kwargs)
+
+
+PRODUCT_FIELDS = ["name", "x_precio_real", "x_existencia_garza", "x_existencia_regiomontano"]
+
+
+def buscar_productos(models, uid, producto, stock_field):
+    """La consulta de catalogo que hacen LOS DOS endpoints. Tiene que salir de
+    una sola funcion: si cada uno arma la suya, la lista numerada que vio el
+    cliente y la que indexa "la 2" dejan de ser la misma.
+
+    Primero exige TODAS las palabras (AND de ORs): "camisa de hombre" trae
+    camisas de hombre y no la prenda de hombre con mas stock, que es lo que
+    devolveria un OR suelto — y apartar esa seria el error caro.
+
+    Si el AND no trae nada, reintenta con OR: alguna palabra sobra o no esta en
+    el catalogo ("ropa americana de dama") y devolver de mas es mejor que
+    mandar al cliente a la rama "No existe" teniendo el producto. Con un solo
+    grupo los dos domains son identicos, asi que no se repite la consulta."""
+    grupos = terminos_busqueda(producto)
+
+    def _buscar(domain):
+        return execute(
+            models, uid, "product.product", "search_read", domain,
+            fields=PRODUCT_FIELDS, limit=MAX_OPCIONES, order=f"{stock_field} desc",
+        )
+
+    rows = _buscar(domain_ilike("name", grupos))
+    if not rows and len(grupos) > 1:
+        rows = _buscar(domain_ilike_or("name", [t for g in grupos for t in g]))
+    return rows
 
 
 def nombre_orden(models, uid, order_id):
@@ -197,13 +287,34 @@ def elegir_opcion(texto, opciones):
 
 # ponytail: self-check de la logica de conexion, sin Odoo real.
 if __name__ == "__main__":
-    # terminos_busqueda: expande solo si es EXACTAMENTE una palabra de un grupo.
-    assert terminos_busqueda("caballero") == ["caballero", "hombre"]
-    assert terminos_busqueda("Caballero") == ["caballero", "hombre"]  # case-insensitive
-    assert terminos_busqueda("dama") == ["dama", "mujer"]
-    assert terminos_busqueda("hombre") == ["caballero", "hombre"]  # cualquier lado del grupo
-    assert terminos_busqueda("ropa para caballero") == ["ropa para caballero"]  # frase: sin expandir
-    assert terminos_busqueda("niño") == ["niño"]  # sin grupo conocido: tal cual
+    # terminos_busqueda: un grupo por palabra util, con sinonimos y singular.
+    assert terminos_busqueda("caballero") == [["caballero", "hombre"]]
+    assert terminos_busqueda("Caballero") == [["caballero", "hombre"]]  # case-insensitive
+    assert terminos_busqueda("dama") == [["dama", "mujer"]]
+    assert terminos_busqueda("hombre") == [["caballero", "hombre"]]  # cualquier lado del grupo
+    assert terminos_busqueda("niño") == [["niño"]]  # sin grupo conocido: tal cual
+
+    # La frase SE PARTE: esto es lo que fallaba el 2026-08-31. El ruido se cae y
+    # el plural llega al singular, que es como se llaman los productos en Odoo.
+    assert terminos_busqueda("pacas de mujer") == [["dama", "mujer"]]
+    assert terminos_busqueda("pacas de mujeres") == [["dama", "mujer", "mujeres"]]
+    assert terminos_busqueda("camisa de caballero") == [["camisa"], ["caballero", "hombre"]]
+    assert terminos_busqueda("pantalones") == [["pantalon", "pantalones"]]
+
+    # Palabras de 1-2 letras fuera: un `ilike "de"` matchea medio catalogo.
+    assert terminos_busqueda("pacas d emujeres") == [["emujer", "emujeres"]]
+
+    # Puro ruido NO puede devolver []: un domain vacio matchea el PRIMER
+    # producto de la tabla. Se busca la frase tal cual, que no matchea nada.
+    assert terminos_busqueda("pacas de ropa") == [["pacas de ropa"]]
+    assert domain_ilike("name", terminos_busqueda("pacas de ropa")) != []
+
+    # domain_ilike: AND de ORs. (caballero|hombre) Y camisa.
+    assert domain_ilike("name", [["camisa"]]) == [["name", "ilike", "camisa"]]
+    assert domain_ilike("name", [["caballero", "hombre"], ["camisa"]]) == [
+        "|", ["name", "ilike", "caballero"], ["name", "ilike", "hombre"],
+        ["name", "ilike", "camisa"],
+    ]
 
     # domain_ilike_or: notacion polaca de Odoo (N terminos -> N-1 '|').
     assert domain_ilike_or("name", ["x"]) == [["name", "ilike", "x"]]
