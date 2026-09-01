@@ -507,7 +507,7 @@ acumula las líneas, así que varias llamadas = un solo pedido con varias pacas.
 Para responderle al cliente, `carrito_texto` trae el pedido completo numerado — sirve
 para el *"llevas: 1. … 2. … ¿algo más?"* sin tener que armar la lista en el prompt.
 
-### A8b. La rama *No existe* — resuelto a medias el 2026-08-31
+### A8b. La rama *No existe* y el `Reactivar bot` — cerrado el 2026-09-01
 
 **Qué pasó (Jimmy Aguilar, 4:36–4:52 PM):** `#1` contestó `producto_encontrado: false`
 para `pacas de invierno`, el flujo se fue a *No existe*, y ahí el bot dio **8 vueltas
@@ -539,10 +539,32 @@ haciendo preguntas aclaratorias** sin poder mandar nunca la lista. El nodo tení
 control al workflow se pone la etiqueta **`stop bot`** y ya no vuelve a escribir
 `¿Qué Producto Te Interesa?`, así que el workflow no puede re-dispararse nunca.
 
-> ⏳ **Pendiente:** un nodo *Eliminar etiqueta de contacto → `stop bot`* (nombre
-> *Reactivar bot*) en **las dos** salidas de `Responder no existe`. Sin él el cliente
-> queda mudo aunque la rama ya termine rápido. El de *No Condition Met* quedó a medio
-> guardar el 2026-08-31; hay que verificarlo y hacer el de *Time Out*.
+**La salida: `Reactivar bot` en TODAS las hojas.** Un nodo *Eliminar etiqueta de contacto*
+con la etiqueta **`stop bot`**, renombrado *Reactivar bot*, colgado de cada salida que
+antes iba directo a FINAL. Sin él el contacto queda mudo para siempre aunque la rama
+termine rápido: la etiqueta no se quita sola. Puesto el 2026-09-01 en las 15 hojas:
+
+| Nodo | Salidas con *Reactivar bot* |
+|---|---|
+| `Responder error Odoo` | No Condition Met, Time Out |
+| `Responder no existe` | No Condition Met, Time Out |
+| `Responder sin stock` | No Condition Met, Time Out |
+| `Responder no concluyente` | No Condition Met, Time Out |
+| `Responder con stock` | Time Out |
+| `Responder con stock (FB)` | No Condition Met, Time Out |
+| `Confirmar apartado` (opción 1/2/3) | No Condition Met, Time Out — de cada una |
+
+> Las salidas *Eligió la 1/2/3* de `Responder con stock` no lo llevan: no son hojas,
+> siguen al webhook `#2`. La reactivación vive al final de cada una, después de
+> `Confirmar apartado`.
+>
+> El nodo se copia con el menú `···` del canvas → *Copiar*, y se pega en el `+` de la
+> rama destino. No arrastra merge tags, así que aquí sí es seguro copiar (compara con la
+> trampa de A9).
+
+> ⏳ **Pendiente:** las otras tres ramas (*sin stock*, *error Odoo*, *no concluyente*)
+> siguen con el merge tag viejo y el límite de respuestas alto. Mismo problema que tuvo
+> *No existe*, esperando su turno.
 
 ### A9. Trampas de la UI de GHL
 

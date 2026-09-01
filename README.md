@@ -250,10 +250,10 @@ con `status:error`, y el body exacto que manda GHL.
 - [x] **Ejemplos de salida del agente corregidos** (2026-08-31) — enseñaban a escribir
   frases y temporadas (`Ropa de invierno para niños`); ahora son términos gruesos. Ver
   [GHL_SETUP.md A2](GHL_SETUP.md#a2-campos-del-contacto--uno-reusado-y-uno-creado)
-- [ ] **Terminar la salida de la rama *No existe*** — falta el nodo *Reactivar bot*
-  (eliminar etiqueta `stop bot`) en las **dos** salidas de `Responder no existe`; el de
-  *No Condition Met* quedó a medio guardar. Sin él el cliente queda mudo aunque la rama ya
-  termine en 2 turnos. Ver [GHL_SETUP.md A8b](GHL_SETUP.md#a8b-la-rama-no-existe--resuelto-a-medias-el-2026-08-31)
+- [x] **El bot revive al terminar el workflow** (2026-09-01) — un nodo *Reactivar bot*
+  (eliminar etiqueta `stop bot`) en las **15 hojas** del workflow. Sin él el contacto
+  quedaba mudo para siempre: la etiqueta que pone el agente al ceder el control no se
+  quita sola. Ver [GHL_SETUP.md A8b](GHL_SETUP.md#a8b-la-rama-no-existe-y-el-reactivar-bot--cerrado-el-2026-09-01)
 - [ ] **Dar el mismo trato a las otras tres ramas** (`sin stock`, `error Odoo`,
   `no concluyente`): siguen con límite de 20 respuestas y con el merge tag que el nodo de
   reseteo ya vació
